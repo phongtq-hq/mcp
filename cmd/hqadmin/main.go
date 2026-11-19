@@ -11,6 +11,7 @@
 //	hqadmin audit verify        [-org acme] [-allow-truncated-head]   kiểm chuỗi hash của audit (mọi org nếu bỏ -org); đứt, mất đầu, hoặc không kiểm được org nào thì thoát mã khác 0
 //	hqadmin audit export        -org acme -from 2026-11-01T00:00:00Z -to 2026-12-01T00:00:00Z -out audit.jsonl
 //	hqadmin audit verify-file   -in audit.jsonl [-after prev.jsonl]   kiểm một file đã xuất (và việc nó nối với file của lần xuất trước), không cần database
+//	hqadmin temporal-certs init -dir /certs [-server-name temporal]   CA nội bộ + chứng chỉ mTLS cho Temporal tự vận hành (ADR-0017); chạy lại được, không cần database
 //
 // -org bỏ trống: server của platform, mọi organization thấy. Các lệnh mcp-server
 // register / discover cần HQ_SERVICE_SIGNING_KEY để gọi managed server.
@@ -41,7 +42,7 @@ func main() {
 	}
 }
 
-const usage = "usage: hqadmin org create | secrets init | maintenance run | audit verify|export|verify-file | mcp-server register|set-endpoint|discover|review | mcp-tool classify  (xem chú thích đầu file hoặc -h của từng lệnh)"
+const usage = "usage: hqadmin org create | secrets init | temporal-certs init | maintenance run | audit verify|export|verify-file | mcp-server register|set-endpoint|discover|review | mcp-tool classify  (xem chú thích đầu file hoặc -h của từng lệnh)"
 
 func run(args []string) error {
 	if len(args) < 2 {
@@ -98,6 +99,8 @@ func run(args []string) error {
 		return nil
 	case "secrets init":
 		return secretsInit(args[2:])
+	case "temporal-certs init":
+		return temporalCertsInit(rest)
 	case "audit verify":
 		org := fs.String("org", "", "slug của organization; bỏ trống = mọi organization")
 		truncated := fs.Bool("allow-truncated-head", false, "chấp nhận chuỗi đã mất phần đầu (chỉ dùng sau khi retention đã xoá phần đó; đối chiếu mỏ neo với file đã xuất)")

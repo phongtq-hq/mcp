@@ -43,6 +43,10 @@ type Options struct {
 
 // Run chạy process tới khi nhận SIGINT / SIGTERM. Trả về mã thoát.
 func Run(opts Options) int {
+	// `<binary> healthcheck`: lệnh tự kiểm cho healthcheck của container, không khởi động gì.
+	if isHealthcheck(os.Args) {
+		return runHealthcheck(os.Getenv, opts.DefaultAddr)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

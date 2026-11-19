@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Điều khiển platform trên máy chủ triển khai (ADR-0017). Một chỗ duy nhất gọi
+# `docker compose` cho deployments/production/compose.yaml, để mọi lệnh đều nạp đúng file
+# env của máy chủ và đúng phiên bản image đang triển khai.
+#
+#   hqctl deploy <tag>     kéo image <tag>, chạy migration, cập nhật worker → gateway → api
+#   hqctl status           trạng thái các container và phiên bản đang chạy
+#   hqctl logs [service…]  log (mặc định: api, gateway, worker)
+#   hqctl admin <args…>    hqadmin trong container (org create, mcp-server register, audit verify…)
+#   hqctl backup           pg_dump vào HQ_BACKUP_DIR
+#   hqctl maintenance      hqadmin maintenance run (phân vùng tháng tới, dọn idempotency key)
+#   hqctl check            kiểm file env và cấu hình compose, không khởi động gì
+#   hqctl compose <args…>  lệnh docker compose bất kỳ với đúng cấu hình
+#
+# Biến: HQ_ENV_FILE (mặc định /etc/hq/hq.env); HQ_COMPOSE_OVERRIDE (mặc định
+# compose.override.yaml cạnh file env, nếu có). Phiên bản image đang triển khai được ghi ở
+# file release.env cạnh file env; lùi phiên bản = `hqctl deploy <tag cũ>` (migration chỉ tiến,
+# nên thay đổi schema phải theo expand → contract; xem .claude/rules/database.md).
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+env_file=${HQ_ENV_FILE:-/etc/hq/hq.env}
+# Không phải shell nào cũng mở rộng "~" sau dấu "=" của export: tự mở rộng ở đây.
+case "$env_file" in "~/"*) env_file=$HOME/${env_file#"~/"} ;; esac
+release_file=$(dirname "$env_file")/release.env
+
+die() { printf 'hqctl: %s\n' "$*" >&2; exit 1; }
+
+[ -f "$env_file" ] || die "không thấy file env $env_file (chép từ $here/hq.env.example; hoặc đặt HQ_ENV_FILE)"
+
+# File env chứa mật khẩu và khoá: chỉ chủ sở hữu được đọc.
+perm=$(stat -c '%a' "$env_file" 2>/dev/null || stat -f '%Lp' "$env_file")
+case "$perm" in
+  600|400) ;;
+  *) die "$env_file đang có quyền $perm; phải là 600 (chmod 600 $env_file)" ;;
+esac
+
+# Phần cố định của mọi lệnh compose. File override (tuỳ chọn) là chỗ cho khác biệt riêng
+# của một máy chủ, ví dụ thêm một managed MCP server, mà không sửa compose.yaml.
+base=(--project-directory "$here" -f "$here/compose.yaml")
+override=${HQ_COMPOSE_OVERRIDE:-$(dirname "$env_file")/compose.override.yaml}
+if [ -f "$override" ]; then base+=(-f "$override"); fi
+base+=(--env-file "$env_file")
+
+compose() {
+  [ -f "$release_file" ] || die "chưa triển khai lần nào trên máy này: chạy hqctl deploy <tag>"
+  docker compose "${base[@]}" --env-file "$release_file" "$@"
+}
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  deploy)
+    tag=${1:-}
+    [ -n "$tag" ] || die "dùng: hqctl deploy <tag của image>"
+    case "$tag" in
+      latest) die "không triển khai tag latest: dùng tag bất biến (commit SHA hoặc vX.Y.Z) để lùi lại được" ;;
+      *[!A-Za-z0-9._-]*) die "tag không hợp lệ: $tag" ;;
+    esac
+    previous=$(sed -n 's/^HQ_IMAGE_TAG=//p' "$release_file" 2>/dev/null || true)
+    printf 'HQ_IMAGE_TAG=%s\n' "$tag" > "$release_file.next"
+    # Thử với phiên bản mới trước khi ghi nhận nó: cấu hình sai thì dừng ở đây.
+    run() { docker compose "${base[@]}" --env-file "$release_file.next" "$@"; }
+    run config -q || { rm -f "$release_file.next"; die "cấu hình compose không hợp lệ"; }
+    # HQ_SKIP_PULL=1: máy không tới được registry, image đã được nạp sẵn bằng `docker load`.
+    if [ "${HQ_SKIP_PULL:-}" != 1 ]; then
+      echo "hqctl: kéo image (${previous:-chưa có} → $tag)"
+      run pull -q || { rm -f "$release_file.next"; die "không kéo được image tag $tag (chưa có gì bị đổi)"; }
+    fi
+    mv "$release_file.next" "$release_file"
+    # Một lệnh up: compose đi theo depends_on (migrate → db-init → worker → gateway → api)
+    # và chờ healthcheck của từng bước. Bước nào hỏng thì các bước sau không được đổi.
+    echo "hqctl: migration, rồi worker → gateway → api"
+    if ! compose up -d --wait --wait-timeout "${HQ_DEPLOY_TIMEOUT:-600}" --remove-orphans; then
+      compose ps -a || true
+      die "triển khai $tag KHÔNG hoàn tất. Xem: hqctl logs. Lùi lại: hqctl deploy ${previous:-<tag trước>}"
+    fi
+    compose ps
+    echo "hqctl: đang chạy $tag"
+    ;;
+  status)
+    echo "phiên bản: $(sed -n 's/^HQ_IMAGE_TAG=//p' "$release_file" 2>/dev/null || echo 'chưa triển khai')"
+    compose ps -a
+    ;;
+  logs)
+    if [ $# -eq 0 ]; then set -- api gateway worker; fi
+    compose logs -f --tail 100 "$@"
+    ;;
+  admin)
+    compose --profile tools run --rm --no-deps hqadmin "$@"
+    ;;
+  maintenance)
+    compose --profile tools run --rm --no-deps hqadmin maintenance run "$@"
+    ;;
+  backup)
+    compose --profile tools run --rm --no-deps backup
+    ;;
+  check)
+    # Chạy được cả trước lần triển khai đầu: khi đó kiểm với một tag giữ chỗ.
+    if [ -f "$release_file" ]; then compose config -q; else HQ_IMAGE_TAG=check docker compose "${base[@]}" config -q; fi
+    echo "hqctl: file env và cấu hình compose hợp lệ"
+    ;;
+  compose)
+    compose "$@"
+    ;;
+  *)
+    sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac

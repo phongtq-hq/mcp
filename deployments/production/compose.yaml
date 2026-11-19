@@ -1,0 +1,538 @@
+# Platform trên MỘT máy chủ, bằng Docker Compose (ADR-0017). Dùng cho staging và production:
+# cùng một file, khác file env. Phát triển cục bộ dùng deployments/compose/docker-compose.yml.
+#
+# Không gọi `docker compose` trực tiếp trên file này: dùng `bin/hqctl` (nó nạp file env của
+# máy chủ và phiên bản image đang triển khai). Mọi biến được giải thích ở hq.env.example;
+# các bước vận hành ở .docs/runbooks/deploy-compose.md.
+#
+# Bố cục:
+#   - Luôn chạy: caddy (cửa vào duy nhất, TLS), migrate → db-init (chạy một lần mỗi lần
+#     triển khai), worker → gateway → api (thứ tự khởi động và cập nhật: worker trước, api sau).
+#   - Thành phần đi kèm, bật bằng COMPOSE_PROFILES trong file env; bỏ profile nào thì trỏ
+#     biến tương ứng tới dịch vụ bên ngoài:
+#       postgres   PostgreSQL trên máy này            (bỏ: HQ_DB_HOST …)
+#       redis      Redis trên máy này                 (bỏ: HQ_REDIS_URL)
+#       temporal   Temporal tự vận hành, mTLS         (bỏ: HQ_TEMPORAL_ADDRESS, HQ_TEMPORAL_API_KEY …)
+#       idp        Keycloak                           (bỏ: HQ_OIDC_ISSUER)
+#       integration-docker   managed MCP server Docker chỉ đọc
+#       tools      lệnh chạy theo yêu cầu: hqadmin, backup
+#
+# Mỗi service chỉ nhận ĐÚNG những biến nó được phép giữ (overview §"Ba process"): không
+# service nào dùng `env_file`. api không có khoá gốc của Secrets, khoá ký ngữ cảnh hay khoá
+# LLM; worker không có khoá nào ngoài khoá execution token và không có đường ra Internet.
+name: hq
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "5"}
+
+# Phần chung của mọi container chạy image của platform (distroless, không root, không shell).
+x-app: &app
+  image: ${HQ_IMAGE:?đặt HQ_IMAGE trong file env}:${HQ_IMAGE_TAG:?chưa có phiên bản image, dùng bin/hqctl deploy <tag>}
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  stop_grace_period: 40s
+  logging: *logging
+
+x-db-host: &db-env
+  PGHOST: ${HQ_DB_HOST:-postgres}
+  PGPORT: ${HQ_DB_PORT:-5432}
+
+# Kết nối Temporal của api và worker. Mặc định là Temporal đi kèm: mTLS bằng CA nội bộ do
+# `temporal-certs` cấp. Dùng dịch vụ quản lý thì đặt các biến HQ_TEMPORAL_TLS_*_FILE và
+# _SERVER_NAME thành RỖNG trong file env (TLS với CA công khai) và đặt HQ_TEMPORAL_API_KEY.
+x-temporal-client: &temporal-client
+  HQ_TEMPORAL_ADDRESS: ${HQ_TEMPORAL_ADDRESS:-temporal:7233}
+  HQ_TEMPORAL_NAMESPACE: ${HQ_TEMPORAL_NAMESPACE:-default}
+  HQ_TEMPORAL_TLS: "1"
+  HQ_TEMPORAL_TLS_CA_FILE: ${HQ_TEMPORAL_TLS_CA_FILE-/certs/ca.pem}
+  HQ_TEMPORAL_TLS_CERT_FILE: ${HQ_TEMPORAL_TLS_CERT_FILE-/certs/client/cert.pem}
+  HQ_TEMPORAL_TLS_KEY_FILE: ${HQ_TEMPORAL_TLS_KEY_FILE-/certs/client/key.pem}
+  HQ_TEMPORAL_TLS_SERVER_NAME: ${HQ_TEMPORAL_TLS_SERVER_NAME-temporal}
+  HQ_TEMPORAL_API_KEY: ${HQ_TEMPORAL_API_KEY:-}
+
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+services:
+  # ------------------------------------------------------------------ cửa vào
+  caddy:
+    image: caddy:${HQ_CADDY_VERSION:-2.10-alpine}
+    restart: unless-stopped
+    environment:
+      HQ_APP_DOMAIN: ${HQ_APP_DOMAIN:?đặt HQ_APP_DOMAIN}
+      HQ_MCP_DOMAIN: ${HQ_MCP_DOMAIN:?đặt HQ_MCP_DOMAIN}
+      HQ_AUTH_DOMAIN: ${HQ_AUTH_DOMAIN:-}
+      HQ_CADDY_ACME: ${HQ_ACME_EMAIL:+email ${HQ_ACME_EMAIL}}
+      HQ_CADDY_GLOBAL: ${HQ_CADDY_GLOBAL:-}
+    ports:
+      - "${HQ_BIND_ADDR:-0.0.0.0}:80:80"
+      - "${HQ_BIND_ADDR:-0.0.0.0}:443:443"
+      - "${HQ_BIND_ADDR:-0.0.0.0}:443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      edge:
+        # api và gateway đọc metadata + khoá của IdP qua đúng địa chỉ công khai của nó
+        # (HQ_OIDC_ISSUER). Với Keycloak đi kèm, tên miền đó trỏ thẳng vào caddy trong mạng
+        # compose: không phụ thuộc DNS ngoài hay NAT vòng của máy chủ, TLS vẫn là chứng chỉ thật.
+        aliases: ["${HQ_AUTH_DOMAIN:-idp.disabled.internal}"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${HQ_MEM_CADDY:-128m}
+    logging: *logging
+
+  # ------------------------------------------------------------------ bước chạy một lần
+  # Migration là một bước riêng, bằng tài khoản quản trị của database; ba process không
+  # bao giờ tự chạy migration. Chỉ tiến (không có `down` ở đây).
+  migrate:
+    <<: *app
+    command: ["/usr/local/bin/migrate", "up"]
+    restart: "no"
+    environment:
+      HQ_MIGRATE_DATABASE_URL: postgres://${HQ_DB_ADMIN_USER:-hq}:${HQ_DB_ADMIN_PASSWORD:?đặt HQ_DB_ADMIN_PASSWORD}@${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/${HQ_DB_NAME:-hq}?sslmode=${HQ_DB_SSLMODE:-disable}
+    depends_on:
+      postgres: {condition: service_healthy, required: false}
+    networks: [backend]
+
+  # Tài khoản đăng nhập của từng process, và database của Temporal / Keycloak đi kèm.
+  # Chạy lại ở mỗi lần triển khai: đổi mật khẩu = sửa file env rồi triển khai lại.
+  db-init:
+    image: postgres:${HQ_POSTGRES_VERSION:-18-alpine}
+    restart: "no"
+    environment:
+      <<: *db-env
+      PGUSER: ${HQ_DB_ADMIN_USER:-hq}
+      PGPASSWORD: ${HQ_DB_ADMIN_PASSWORD}
+      PGDATABASE: ${HQ_DB_NAME:-hq}
+      PGSSLMODE: ${HQ_DB_SSLMODE:-disable}
+      API_PW: ${HQ_DB_API_PASSWORD:?đặt HQ_DB_API_PASSWORD}
+      GATEWAY_PW: ${HQ_DB_GATEWAY_PASSWORD:?đặt HQ_DB_GATEWAY_PASSWORD}
+      WORKER_PW: ${HQ_DB_WORKER_PASSWORD:?đặt HQ_DB_WORKER_PASSWORD}
+      TEMPORAL_PW: ${HQ_DB_TEMPORAL_PASSWORD:-}
+      KEYCLOAK_PW: ${HQ_DB_KEYCLOAK_PASSWORD:-}
+    # Mật khẩu đi qua biến môi trường của container rồi tới psql bằng -v: không nằm trên
+    # dòng lệnh của compose, không nằm trong file SQL.
+    entrypoint: ["sh", "-ec"]
+    command:
+      - exec psql -X -q -v ON_ERROR_STOP=1 -v api_pw="$$API_PW" -v gateway_pw="$$GATEWAY_PW" -v worker_pw="$$WORKER_PW" -v temporal_pw="$$TEMPORAL_PW" -v keycloak_pw="$$KEYCLOAK_PW" -f /db-init.sql
+    volumes:
+      - ./postgres/db-init.sql:/db-init.sql:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [backend]
+    logging: *logging
+
+  # ------------------------------------------------------------------ ba process
+  # Thứ tự: worker → gateway → api. Worker cũ không biết kế hoạch do api mới tạo, nên mọi
+  # lần cập nhật đều đổi worker trước (CLAUDE.md "Deploy: worker trước, api sau").
+  worker:
+    <<: *app
+    command: ["/usr/local/bin/worker"]
+    environment:
+      <<: [*temporal-client, *otel]
+      HQ_ENV: ${HQ_ENV:?đặt HQ_ENV là staging hoặc production}
+      HQ_HTTP_ADDR: ":8082"
+      HQ_DATABASE_URL: postgres://hq_worker:${HQ_DB_WORKER_PASSWORD}@${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/${HQ_DB_NAME:-hq}?sslmode=${HQ_DB_SSLMODE:-disable}
+      HQ_GATEWAY_INTERNAL_URL: http://gateway:8081
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY:?đặt HQ_EXECUTION_TOKEN_KEY}
+    volumes:
+      - temporal-certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/worker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+      temporal-init: {condition: service_completed_successfully, required: false}
+    # Chỉ mạng nội bộ: worker xử lý output của model và không có đường nào ra Internet hay
+    # tới hệ thống đích. Mọi lượt model và tool call của nó đi qua gateway.
+    networks: [backend]
+    mem_limit: ${HQ_MEM_WORKER:-1g}
+
+  gateway:
+    <<: *app
+    command: ["/usr/local/bin/gateway"]
+    # File khoá gốc phải 0600 và thuộc về uid này trên máy chủ (mặc định 65532 = nonroot của image).
+    user: "${HQ_GATEWAY_UID:-65532}:${HQ_GATEWAY_GID:-65532}"
+    environment:
+      <<: *otel
+      HQ_ENV: ${HQ_ENV}
+      HQ_HTTP_ADDR: ":8081"
+      HQ_DATABASE_URL: postgres://hq_gateway:${HQ_DB_GATEWAY_PASSWORD}@${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/${HQ_DB_NAME:-hq}?sslmode=${HQ_DB_SSLMODE:-disable}
+      HQ_REDIS_URL: ${HQ_REDIS_URL:-redis://redis:6379/0}
+      HQ_OIDC_ISSUER: ${HQ_OIDC_ISSUER:?đặt HQ_OIDC_ISSUER}
+      HQ_GATEWAY_OIDC_AUDIENCE: ${HQ_GATEWAY_OIDC_AUDIENCE:-hq-gateway}
+      HQ_OIDC_ORG_CLAIM: ${HQ_OIDC_ORG_CLAIM:-org_id}
+      HQ_GATEWAY_PUBLIC_URL: https://${HQ_MCP_DOMAIN}
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY}
+      HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY:?đặt HQ_SERVICE_TOKEN_KEY}
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY:?đặt HQ_SERVICE_SIGNING_KEY}
+      # Khoá gốc cục bộ của Secrets (ADR-0012): chỉ process này được mount. Provider cục bộ
+      # bị từ chối khi HQ_ENV=production; ở đó để trống HQ_SECRETS_ROOT_KEY_FILE cho tới
+      # khi có provider Cloud KMS (khi ấy không lưu được credential của org).
+      HQ_SECRETS_ROOT_KEY_FILE: ${HQ_SECRETS_ROOT_KEY_FILE:+/run/secrets/hq_root_key}
+      HQ_ANTHROPIC_API_KEY: ${HQ_ANTHROPIC_API_KEY:-}
+    secrets: [hq_root_key]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/gateway", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+      worker: {condition: service_healthy}
+      redis: {condition: service_healthy, required: false}
+      keycloak: {condition: service_healthy, required: false}
+      caddy: {condition: service_started}
+    networks: [backend, edge]
+    mem_limit: ${HQ_MEM_GATEWAY:-512m}
+
+  api:
+    <<: *app
+    command: ["/usr/local/bin/api"]
+    environment:
+      <<: [*temporal-client, *otel]
+      HQ_ENV: ${HQ_ENV}
+      HQ_HTTP_ADDR: ":8080"
+      HQ_DATABASE_URL: postgres://hq_api:${HQ_DB_API_PASSWORD}@${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/${HQ_DB_NAME:-hq}?sslmode=${HQ_DB_SSLMODE:-disable}
+      HQ_OIDC_ISSUER: ${HQ_OIDC_ISSUER}
+      HQ_OIDC_AUDIENCE: ${HQ_OIDC_AUDIENCE:-hq-api}
+      HQ_OIDC_ORG_CLAIM: ${HQ_OIDC_ORG_CLAIM:-org_id}
+      HQ_GATEWAY_INTERNAL_URL: http://gateway:8081
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY}
+      HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY}
+      HQ_SECRETS_PUBLIC_KEY: ${HQ_SECRETS_PUBLIC_KEY:-}
+      # Giao diện web ở https://<HQ_APP_DOMAIN>/ui/. Ngoài local phải bật tường minh.
+      HQ_UI_ENABLED: ${HQ_UI_ENABLED:-1}
+      HQ_UI_OIDC_CLIENT_ID: ${HQ_UI_OIDC_CLIENT_ID:-hq-web}
+    volumes:
+      - temporal-certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/api", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+      worker: {condition: service_healthy}
+      gateway: {condition: service_healthy}
+      temporal-init: {condition: service_completed_successfully, required: false}
+      keycloak: {condition: service_healthy, required: false}
+      caddy: {condition: service_started}
+    networks: [backend, edge]
+    mem_limit: ${HQ_MEM_API:-512m}
+
+  # ------------------------------------------------------------------ profile: postgres
+  postgres:
+    image: postgres:${HQ_POSTGRES_VERSION:-18-alpine}
+    restart: unless-stopped
+    profiles: [postgres]
+    environment:
+      POSTGRES_USER: ${HQ_DB_ADMIN_USER:-hq}
+      POSTGRES_PASSWORD: ${HQ_DB_ADMIN_PASSWORD}
+      POSTGRES_DB: ${HQ_DB_NAME:-hq}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${HQ_PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - max_connections=${HQ_PG_MAX_CONNECTIONS:-200}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    shm_size: 256m
+    stop_grace_period: 60s
+    networks: [backend]
+    mem_limit: ${HQ_MEM_POSTGRES:-1g}
+    logging: *logging
+
+  # ------------------------------------------------------------------ profile: redis
+  # Rate limit và bộ đếm budget của gateway. Chỉ chứa dữ liệu tái tạo được: không
+  # persistence. noeviction: đầy bộ nhớ thì lệnh ghi lỗi và gateway từ chối (fail-closed),
+  # thay vì Redis lặng lẽ xoá một bộ đếm.
+  redis:
+    image: redis:${HQ_REDIS_VERSION:-8-alpine}
+    restart: unless-stopped
+    profiles: [redis]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "${HQ_REDIS_MAXMEMORY:-96mb}", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    mem_limit: ${HQ_MEM_REDIS:-160m}
+    logging: *logging
+
+  # ------------------------------------------------------------------ profile: temporal
+  # Temporal tự vận hành, một container, lưu trong PostgreSQL (database riêng `temporal`,
+  # `temporal_visibility`). Frontend đòi chứng chỉ client: chỉ api và worker có.
+  # CA nội bộ và chứng chỉ: cấp một lần vào volume, cấp lại chứng chỉ lá khi gần hết hạn.
+  temporal-certs:
+    <<: *app
+    profiles: [temporal]
+    restart: "no"
+    read_only: false
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    command: ["/usr/local/bin/hqadmin", "temporal-certs", "init", "-dir", "/certs", "-server-name", "temporal"]
+    volumes:
+      - temporal-certs:/certs
+    network_mode: none
+
+  temporal-schema:
+    image: temporalio/admin-tools:${HQ_TEMPORAL_VERSION:-1.32.2}
+    profiles: [temporal]
+    restart: "no"
+    environment:
+      SQL_PLUGIN: postgres12
+      SQL_HOST: ${HQ_DB_HOST:-postgres}
+      SQL_PORT: ${HQ_DB_PORT:-5432}
+      SQL_USER: temporal
+      SQL_PASSWORD: ${HQ_DB_TEMPORAL_PASSWORD:-}
+    entrypoint: ["sh", "/setup-schema.sh"]
+    volumes:
+      - ./temporal/setup-schema.sh:/setup-schema.sh:ro
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+      # Chứng chỉ phải có trước khi Temporal khởi động. Điều kiện đó đặt ở ĐÂY chứ không ở
+      # service `temporal`: temporal-certs chạy bằng image của platform, nên nó được tạo lại
+      # ở mỗi lần đổi phiên bản, và compose khởi động lại mọi service phụ thuộc TRỰC TIẾP
+      # vào một service vừa được tạo lại. Temporal không được rớt theo mỗi lần triển khai.
+      temporal-certs: {condition: service_completed_successfully}
+    networks: [backend]
+    logging: *logging
+
+  temporal:
+    image: temporalio/server:${HQ_TEMPORAL_VERSION:-1.32.2}
+    profiles: [temporal]
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: ${HQ_DB_PORT:-5432}
+      POSTGRES_SEEDS: ${HQ_DB_HOST:-postgres}
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${HQ_DB_TEMPORAL_PASSWORD:-}
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      SQL_MAX_CONNS: ${HQ_TEMPORAL_SQL_MAX_CONNS:-20}
+      SQL_VIS_MAX_CONNS: ${HQ_TEMPORAL_SQL_VIS_MAX_CONNS:-10}
+      BIND_ON_IP: 0.0.0.0
+      TEMPORAL_BROADCAST_ADDRESS: 127.0.0.1
+      # KHÔNG đổi được sau lần khởi động đầu tiên của cụm.
+      NUM_HISTORY_SHARDS: ${HQ_TEMPORAL_HISTORY_SHARDS:-128}
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamicconfig.yaml
+      LOG_LEVEL: ${HQ_TEMPORAL_LOG_LEVEL:-warn}
+      TEMPORAL_TLS_REQUIRE_CLIENT_AUTH: "true"
+      TEMPORAL_TLS_SERVER_CA_CERT: /certs/ca.pem
+      TEMPORAL_TLS_SERVER_CERT: /certs/server/cert.pem
+      TEMPORAL_TLS_SERVER_KEY: /certs/server/key.pem
+      TEMPORAL_TLS_INTERNODE_SERVER_NAME: temporal
+      TEMPORAL_TLS_INTERNODE_DISABLE_HOST_VERIFICATION: "false"
+      TEMPORAL_TLS_FRONTEND_CERT: /certs/server/cert.pem
+      TEMPORAL_TLS_FRONTEND_KEY: /certs/server/key.pem
+      TEMPORAL_TLS_CLIENT1_CA_CERT: /certs/ca.pem
+      TEMPORAL_TLS_CLIENT2_CA_CERT: /certs/ca.pem
+      TEMPORAL_TLS_FRONTEND_SERVER_NAME: temporal
+      TEMPORAL_TLS_FRONTEND_DISABLE_HOST_VERIFICATION: "false"
+    volumes:
+      - temporal-certs:/certs:ro
+      - ./temporal/dynamicconfig.yaml:/etc/temporal/dynamicconfig.yaml:ro
+    healthcheck:
+      # Chỉ kiểm cổng (image không có công cụ gọi gRPC); `temporal-init` mới là bước xác
+      # nhận frontend trả lời được qua mTLS.
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      temporal-schema: {condition: service_completed_successfully}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 40s
+    networks: [backend]
+    mem_limit: ${HQ_MEM_TEMPORAL:-1g}
+    logging: *logging
+
+  # Namespace và search attribute mà platform cần (OrgId, ProjectId). Chạy lại được.
+  temporal-init:
+    image: temporalio/admin-tools:${HQ_TEMPORAL_VERSION:-1.32.2}
+    profiles: [temporal]
+    restart: "no"
+    # Chứng chỉ client thuộc uid của platform; bước này dùng chính chứng chỉ đó.
+    user: "65532:65532"
+    environment:
+      HOME: /tmp
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${HQ_TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_TLS: "true"
+      TEMPORAL_TLS_SERVER_CA_CERT_PATH: /certs/ca.pem
+      TEMPORAL_TLS_CLIENT_CERT_PATH: /certs/client/cert.pem
+      TEMPORAL_TLS_CLIENT_KEY_PATH: /certs/client/key.pem
+      TEMPORAL_TLS_SERVER_NAME: temporal
+      HQ_TEMPORAL_RETENTION: ${HQ_TEMPORAL_RETENTION:-168h}
+    entrypoint: ["sh", "/init-namespace.sh"]
+    volumes:
+      - temporal-certs:/certs:ro
+      - ./temporal/init-namespace.sh:/init-namespace.sh:ro
+    depends_on:
+      temporal: {condition: service_healthy}
+    networks: [backend]
+    logging: *logging
+
+  # ------------------------------------------------------------------ profile: idp
+  # Keycloak ở chế độ production (ADR-0011), lưu trong PostgreSQL (database `keycloak`).
+  # Realm `hq` được import ở lần khởi động đầu tiên từ keycloak/hq-realm.json: không có
+  # user, không có password grant. Realm đã tồn tại thì KHÔNG bị ghi đè.
+  # Console quản trị chỉ nghe ở loopback của máy chủ: ssh -L 8180:127.0.0.1:8180 <máy chủ>.
+  keycloak:
+    image: quay.io/keycloak/keycloak:${HQ_KEYCLOAK_VERSION:-26.4}
+    profiles: [idp]
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${HQ_DB_KEYCLOAK_PASSWORD:-}
+      KC_HOSTNAME: https://${HQ_AUTH_DOMAIN:-idp.disabled.internal}
+      KC_HOSTNAME_ADMIN: http://localhost:${HQ_KEYCLOAK_ADMIN_PORT:-8180}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${HQ_KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${HQ_KEYCLOAK_ADMIN_PASSWORD:-}
+      # Dùng trong hq-realm.json (redirect URI của giao diện web).
+      HQ_APP_ORIGIN: https://${HQ_APP_DOMAIN}
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "127.0.0.1:${HQ_KEYCLOAK_ADMIN_PORT:-8180}:8080"
+    healthcheck:
+      # Image không có curl: hỏi /health/ready ở cổng quản lý (9000) bằng /dev/tcp của bash.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 60s
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend, edge]
+    mem_limit: ${HQ_MEM_KEYCLOAK:-1g}
+    logging: *logging
+
+  # ------------------------------------------------------------------ profile: integration-docker
+  # Managed MCP server Docker chỉ đọc (use case dẫn đường). Đăng ký trong Registry với
+  # endpoint http://integration-docker:8090/mcp. Một Docker host thuộc đúng một organization.
+  integration-docker:
+    <<: *app
+    profiles: [integration-docker]
+    command: ["/usr/local/bin/integration-docker"]
+    environment:
+      HQ_ENV: ${HQ_ENV}
+      HQ_HTTP_ADDR: ":8090"
+      HQ_DOCKER_API_URL: http://docker-proxy:2375
+      HQ_DOCKER_ORG_ID: ${HQ_DOCKER_ORG_ID:-}
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/integration-docker", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      docker-proxy: {condition: service_started}
+    networks: [backend, dockerapi]
+    mem_limit: ${HQ_MEM_INTEGRATION:-128m}
+
+  # Proxy chỉ đọc trước Docker socket: chỉ nhóm API "containers", chỉ GET. Nó nằm trên một
+  # mạng riêng chỉ có integration-docker: không container nào khác đọc được API của Docker
+  # (và qua đó biến môi trường của gateway).
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:${HQ_DOCKER_PROXY_VERSION:-0.3}
+    profiles: [integration-docker]
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [dockerapi]
+    mem_limit: 64m
+    logging: *logging
+
+  # ------------------------------------------------------------------ profile: tools
+  # Công cụ quản trị, chạy theo lệnh: bin/hqctl admin org create -slug … Nó dùng tài khoản
+  # quản trị của database và khoá ký ngữ cảnh; không service thường trực nào giữ tài khoản này.
+  hqadmin:
+    <<: *app
+    profiles: [tools]
+    restart: "no"
+    entrypoint: ["/usr/local/bin/hqadmin"]
+    command: []
+    environment:
+      HQ_ENV: ${HQ_ENV}
+      HQ_ADMIN_DATABASE_URL: postgres://${HQ_DB_ADMIN_USER:-hq}:${HQ_DB_ADMIN_PASSWORD}@${HQ_DB_HOST:-postgres}:${HQ_DB_PORT:-5432}/${HQ_DB_NAME:-hq}?sslmode=${HQ_DB_SSLMODE:-disable}
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY}
+    networks: [backend]
+
+  # Sao lưu logic: pg_dump từng database + pg_dumpall --globals-only vào HQ_BACKUP_DIR của
+  # máy chủ. Chạy bằng bin/hqctl backup (đặt lịch bằng cron / systemd timer của máy chủ).
+  backup:
+    image: postgres:${HQ_POSTGRES_VERSION:-18-alpine}
+    profiles: [tools]
+    restart: "no"
+    environment:
+      <<: *db-env
+      PGUSER: ${HQ_DB_ADMIN_USER:-hq}
+      PGPASSWORD: ${HQ_DB_ADMIN_PASSWORD}
+      PGSSLMODE: ${HQ_DB_SSLMODE:-disable}
+      HQ_DB_NAME: ${HQ_DB_NAME:-hq}
+      HQ_BACKUP_KEEP_DAYS: ${HQ_BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["sh", "/backup.sh"]
+    volumes:
+      - ./postgres/backup.sh:/backup.sh:ro
+      - ${HQ_BACKUP_DIR:-./backups}:/backups
+    networks: [backend]
+    logging: *logging
+
+secrets:
+  hq_root_key:
+    file: ${HQ_SECRETS_ROOT_KEY_FILE:-/dev/null}
+
+networks:
+  # Mạng nội bộ không có đường ra Internet: database, Redis, Temporal và các lời gọi giữa
+  # ba process. Không cổng nào của mạng này được publish.
+  backend:
+    internal: true
+  # Mạng có đường ra: caddy (cổng 80 / 443), api và gateway (IdP, LLM provider, MCP server
+  # ngoài qua SSRF guard), Keycloak.
+  edge: {}
+  dockerapi:
+    internal: true
+
+volumes:
+  pgdata:
+  caddy-data:
+  caddy-config:
+  temporal-certs:
