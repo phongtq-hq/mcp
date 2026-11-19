@@ -3205,6 +3205,11 @@ type CreateModelParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// UpdateModelParams defines parameters for UpdateModel.
+type UpdateModelParams struct {
+	IfMatch *IfMatch `json:"If-Match,omitempty"`
+}
+
 // ListModelPricingParams defines parameters for ListModelPricing.
 type ListModelPricingParams struct {
 	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`

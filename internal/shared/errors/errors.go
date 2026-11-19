@@ -32,7 +32,18 @@ type Error struct {
 	Code      string // mã ổn định, ví dụ "validation_failed"
 	Message   string // an toàn để trả cho client
 	Retryable bool
-	cause     error
+	// Fields là chi tiết theo trường của một lỗi validate (đi ra ngoài qua `errors[]` của
+	// problem+json). Rỗng với mọi lỗi khác.
+	Fields []FieldError
+	cause  error
+}
+
+// FieldError là một lỗi validate gắn với một trường của thân request. Field là tên trường
+// như client gửi (đường dẫn dùng dấu chấm cho trường lồng nhau, ví dụ "settings.orchestration").
+type FieldError struct {
+	Field   string
+	Code    string // tuỳ chọn; mã ổn định cho máy đọc
+	Message string // an toàn để trả cho client
 }
 
 func (e *Error) Error() string {
@@ -52,6 +63,13 @@ func New(kind Kind, code, message string) *Error {
 // Wrap bọc một lỗi gốc. Lỗi gốc không bao giờ được trả cho client.
 func Wrap(cause error, kind Kind, code, message string) *Error {
 	return &Error{Kind: kind, Code: code, Message: message, cause: cause}
+}
+
+// InvalidField tạo lỗi validate (422, `validation_failed`) gắn với một trường. Message là
+// thông báo của cả lỗi lẫn của trường: client không đọc `errors[]` vẫn thấy đủ.
+func InvalidField(field, message string) *Error {
+	return &Error{Kind: KindUnprocessable, Code: "validation_failed", Message: message,
+		Fields: []FieldError{{Field: field, Message: message}}}
 }
 
 // AsRetryable đánh dấu lỗi là có thể thử lại.

@@ -89,7 +89,12 @@ func TestModelCatalogAPI(t *testing.T) {
 
 	t.Run("models", func(t *testing.T) {
 		want(t, e.do("POST", "/v1/models", adminA, modelBody("sonnet", "standard"), nil), 409, "model_exists")
-		want(t, e.do("POST", "/v1/models", adminA, modelBody("opus", "ultra"), nil), 422, "validation_failed")
+		bad := e.do("POST", "/v1/models", adminA, modelBody("opus", "ultra"), nil)
+		want(t, bad, 422, "validation_failed")
+		// Lỗi validate chỉ rõ trường sai (`errors[]` của problem+json).
+		if errs, _ := bad.json(t)["errors"].([]any); len(errs) != 1 || errs[0].(map[string]any)["field"] != "tier" {
+			t.Errorf("errors[] của tier sai: %s", bad.body)
+		}
 		want(t, e.do("POST", "/v1/models", adminA, modelBody("has space", "premium"), nil), 422, "validation_failed")
 		missing := modelBody("opus", "premium")
 		missing["provider_id"] = uuid.NewString()
@@ -117,6 +122,23 @@ func TestModelCatalogAPI(t *testing.T) {
 		if count("enabled=true") != 1 || count("enabled=false") != 1 {
 			t.Error("lọc enabled sai")
 		}
+
+		// If-Match: ETag của bản đã đọc; lệch thì 412 và không sửa gì. Không gửi thì sửa vô điều kiện.
+		etag := g.header.Get("ETag")
+		if etag == "" {
+			t.Fatal("GET /v1/models/{id} phải trả ETag")
+		}
+		u := e.do("PATCH", "/v1/models/"+sonnet, adminA, map[string]any{"display_name": "Sonnet A"}, map[string]string{"If-Match": etag})
+		want(t, u, 200, "")
+		if next := u.header.Get("ETag"); next == "" || next == etag {
+			t.Errorf("PATCH phải trả ETag mới: %q → %q", etag, next)
+		}
+		want(t, e.do("PATCH", "/v1/models/"+sonnet, adminA, map[string]any{"display_name": "Sonnet B"}, map[string]string{"If-Match": etag}), 412, "precondition_failed")
+		want(t, e.do("PATCH", "/v1/models/"+sonnet, adminA, map[string]any{"display_name": "Sonnet B"}, map[string]string{"If-Match": "không phải etag"}), 412, "precondition_failed")
+		if name := e.do("GET", "/v1/models/"+sonnet, adminA, nil, nil).json(t)["display_name"]; name != "Sonnet A" {
+			t.Errorf("PATCH bị 412 vẫn sửa tên: %v", name)
+		}
+		want(t, e.do("PATCH", "/v1/models/"+sonnet, adminA, map[string]any{"display_name": "sonnet"}, map[string]string{"If-Match": u.header.Get("ETag")}), 200, "")
 		want(t, e.do("GET", "/v1/models?tier=bogus", adminA, nil, nil), 400, "invalid_parameter")
 		want(t, e.do("GET", "/v1/models?enabled=maybe", adminA, nil, nil), 400, "invalid_parameter")
 		// Phân trang.

@@ -77,4 +77,5 @@ UPDATE models SET
   deprecated_at = COALESCE(sqlc.narg('deprecated_at'), deprecated_at),
   updated_at    = clock_timestamp()
 WHERE org_id = @org_id AND id = @id
+  AND (sqlc.narg('if_updated_at')::timestamptz IS NULL OR updated_at = sqlc.narg('if_updated_at'))
 RETURNING id, org_id, provider_id, provider_model, display_name, tier, capabilities, enabled, deprecated_at, created_at, updated_at;

@@ -4106,7 +4106,9 @@ export interface operations {
     updateModel: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "If-Match"?: components["parameters"]["IfMatch"];
+            };
             path: {
                 modelId: components["parameters"]["ModelId"];
             };

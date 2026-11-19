@@ -965,6 +965,7 @@ paths:
     patch:
       tags: [Models]
       operationId: updateModel
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelUpdate'}}}}
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Model'}}}}

@@ -19,7 +19,19 @@ type Problem struct {
 	Detail  string `json:"detail,omitempty"`
 	Code    string `json:"code"`
 	TraceID string `json:"trace_id,omitempty"`
+	// Errors là chi tiết theo trường của lỗi validate (400 / 422); không có với lỗi khác.
+	Errors []ProblemField `json:"errors,omitempty"`
 }
+
+// ProblemField là một mục của `errors[]`.
+type ProblemField struct {
+	Field   string `json:"field"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// maxProblemFields là trần số mục `errors[]` của một phản hồi.
+const maxProblemFields = 50
 
 var statusByKind = map[apperr.Kind]int{
 	apperr.KindInternal:           http.StatusInternalServerError,
@@ -47,6 +59,15 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		p.Status = statusByKind[e.Kind]
 		p.Code = e.Code
 		p.Detail = e.Message
+		// Chi tiết theo trường chỉ đi kèm lỗi của chính request (sai cú pháp / ngữ nghĩa).
+		if p.Status == http.StatusBadRequest || p.Status == http.StatusUnprocessableEntity {
+			for i, f := range e.Fields {
+				if i == maxProblemFields {
+					break
+				}
+				p.Errors = append(p.Errors, ProblemField(f))
+			}
+		}
 	}
 	p.Title = http.StatusText(p.Status)
 	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
