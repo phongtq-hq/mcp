@@ -7,19 +7,26 @@ import { t, type Key } from '@/i18n';
 import { shortId } from '@/lib/format';
 import { LanguageSelect } from './login';
 
-const NAV: readonly (readonly [string, Key])[] = [
+type NavItem = readonly [string, Key];
+
+const NAV: readonly NavItem[] = [
   ['/', 'navOverview'],
   ['/projects', 'navProjects'],
   ['/approvals', 'navApprovals'],
   ['/cost', 'navCost'],
   ['/mcp', 'navMcp'],
+];
+// Nhóm Quản trị: cấu hình của cả organization.
+const ADMIN: readonly NavItem[] = [
+  ['/admin/organization', 'navOrganization'],
   ['/audit', 'navAudit'],
 ];
+const ALL: readonly NavItem[] = [...NAV, ...ADMIN];
 
 // navSection: mục điều hướng đang chọn. Chi tiết lần chạy thuộc mục Dự án.
 function navSection(path: string): string {
   if (path.startsWith('/projects') || path.startsWith('/executions')) return '/projects';
-  for (const [href] of NAV) if (href !== '/' && path.startsWith(href)) return href;
+  for (const [href] of ALL) if (href !== '/' && path.startsWith(href)) return href;
   return '/';
 }
 
@@ -49,6 +56,12 @@ export function Shell() {
               {key === 'navApprovals' && count > 0 ? <span className="count">{count}</span> : null}
             </Link>
           ))}
+          <div className="nav-section" role="group" aria-label={t('navAdmin')}>
+            <div className="nav-group" aria-hidden="true">{t('navAdmin')}</div>
+            {ADMIN.map(([href, key]) => (
+              <Link key={href} to={href} aria-current={href === section ? 'page' : undefined}>{t(key)}</Link>
+            ))}
+          </div>
         </nav>
         <div className="side-foot">
           <div>

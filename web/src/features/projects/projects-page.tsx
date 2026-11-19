@@ -12,7 +12,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate();
   const query = useQuery({ queryKey: ['projects'], queryFn: () => get<PageOf<Schemas['Project']>>('/projects?limit=200') });
   return (
-    <Page title={t('navProjects')} lead={t('projectsLead')}>
+    <Page title={t('navProjects')} lead={t('projectsLead')} actions={<Link className="btn primary" to="/projects/new">{t('newProject')}</Link>}>
       <Async query={query}>
         {r => (
           <DataTable

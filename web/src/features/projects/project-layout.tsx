@@ -6,7 +6,7 @@ import { EnvLabel } from '@/components/labels';
 import { t, type Key } from '@/i18n';
 import { isUuid } from '@/lib/format';
 
-const TABS: readonly (readonly [string, Key])[] = [['executions', 'tabExecutions'], ['agents', 'tabAgents'], ['workflows', 'tabWorkflows']];
+const TABS: readonly (readonly [string, Key])[] = [['executions', 'tabExecutions'], ['agents', 'tabAgents'], ['workflows', 'tabWorkflows'], ['settings', 'tabSettings']];
 
 // Khung của một dự án: tiêu đề và các tab. Nội dung từng tab là route con (Outlet).
 export default function ProjectLayout() {

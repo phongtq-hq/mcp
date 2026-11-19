@@ -42,12 +42,13 @@ export const vi = {
 
   // Lỗi
   errTitle: 'Có lỗi xảy ra',
-  errForbidden: 'Bạn không có quyền xem mục này.',
+  errForbidden: 'Bạn không có quyền thực hiện việc này.',
   errNotFound: 'Không tìm thấy.',
   errNetwork: 'Không kết nối được tới máy chủ.',
   errSession: 'Phiên đăng nhập đã hết hạn. Đang chuyển tới trang đăng nhập…',
   errConflict: 'Mục này đã bị thay đổi ở nơi khác kể từ lúc bạn mở nó. Tải lại trang rồi sửa lại; thay đổi của bạn chưa được lưu.',
   invalidJson: 'JSON không hợp lệ.',
+  errNoETag: 'Không sửa được: máy chủ không gửi phiên bản (ETag) của mục này, nên không thể bảo đảm không ghi đè thay đổi của người khác.',
 
   // Form và xác nhận
   saving: 'Đang lưu…',
@@ -58,10 +59,14 @@ export const vi = {
   archive: 'Lưu trữ',
   saved: 'Đã lưu.',
   choose: '— chọn —',
+  id: 'ID',
+  sectionLocked: 'Một mục khác trên trang đang có thay đổi chưa lưu. Lưu hoặc bỏ thay đổi ở mục đó trước.',
+  discardChanges: 'Bỏ thay đổi',
   generalInfo: 'Thông tin chung',
   dangerZone: 'Vùng nguy hiểm',
   advancedSettings: 'Cài đặt nâng cao (JSON)',
   advancedSettingsHint: 'Toàn bộ settings được THAY bằng nội dung này. Máy chủ kiểm từng khoá khi lưu.',
+  settingsJson: 'Settings (JSON)',
   settingsMustBeObject: 'Settings phải là một object JSON hợp lệ.',
 
   // Dự án: tạo và cài đặt
