@@ -1,0 +1,104 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - bodyclose
+    - errorlint
+    - noctx
+    - sqlclosecheck
+  exclusions:
+    rules:
+      # Test dùng httptest.NewRequest, http.Get... không cần context tường minh.
+      - path: _test\.go
+        linters: [noctx]
+  settings:
+    depguard:
+      # Luật phụ thuộc giữa bounded context (ADR-0001, overview §2).
+      # KHÔNG nới các luật này để code qua được; cần thay đổi thì viết ADR.
+      # Luật "không import store của context khác" nằm ở tests/arch.
+      rules:
+        shared:
+          files: ["**/internal/shared/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/platform", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/agent", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/ai", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/cost", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/integration", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/audit", desc: "shared không phụ thuộc bounded context"}
+            - {pkg: "github.com/hqgroups/mcp/internal/observability", desc: "shared không phụ thuộc bounded context"}
+        platform:
+          files: ["**/internal/platform/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/agent", desc: "platform (identity, authz, secrets) không biết về Agent"}
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp", desc: "platform không phụ thuộc MCP"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "platform không phụ thuộc Workflow"}
+            - {pkg: "github.com/hqgroups/mcp/internal/ai", desc: "platform không phụ thuộc AI Provider"}
+            - {pkg: "github.com/hqgroups/mcp/internal/cost", desc: "platform không phụ thuộc Cost"}
+            - {pkg: "github.com/hqgroups/mcp/internal/integration", desc: "platform không phụ thuộc integration"}
+        cost:
+          files: ["**/internal/cost/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/agent", desc: "cost không biết Agent hoạt động thế nào"}
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp", desc: "cost không phụ thuộc MCP"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "cost không phụ thuộc Workflow"}
+        ai:
+          files: ["**/internal/ai/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/agent", desc: "ai (router, provider) không biết gì về Agent"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "ai không phụ thuộc Workflow"}
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp", desc: "ai không phụ thuộc MCP"}
+        mcp:
+          files: ["**/internal/mcp/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/agent", desc: "MCP Gateway không chứa logic của Agent"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "MCP Gateway không phụ thuộc Workflow"}
+            - {pkg: "github.com/hqgroups/mcp/internal/integration", desc: "Gateway gọi integration qua giao thức MCP, không import code"}
+        agent:
+          files: ["**/internal/agent/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/integration", desc: "Agent Runtime tới tool qua MCP Gateway, không import integration"}
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp/gateway", desc: "Agent Runtime gọi Gateway qua giao thức, không import code của Gateway"}
+            - {pkg: "github.com/hqgroups/mcp/internal/platform/secrets", desc: "Agent Runtime không giữ credential (ADR-0008)"}
+            - {pkg: "github.com/hqgroups/mcp/internal/workflow", desc: "Workflow phụ thuộc Execution, không ngược lại"}
+        # Phần thuần của Orchestrator (kiểm kế hoạch, bộ lập lịch) là thân của workflow cha
+        # trên Temporal: không I/O, không đồng hồ, không phụ thuộc package nào của dự án.
+        orchestrator-pure:
+          files: ["**/internal/agent/orchestrator/**", "!**/*_test.go"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal", desc: "agent/orchestrator là logic thuần, không import package nào của dự án"}
+            - {pkg: "github.com/jackc/pgx", desc: "agent/orchestrator không chạm database"}
+            - {pkg: "database/sql", desc: "agent/orchestrator không chạm database"}
+            - {pkg: "net/http", desc: "agent/orchestrator không có I/O"}
+            - {pkg: "os", desc: "agent/orchestrator không có I/O"}
+            - {pkg: "time", desc: "agent/orchestrator không đọc đồng hồ (thân workflow phải deterministic)"}
+        workflow:
+          files: ["**/internal/workflow/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/mcp", desc: "Workflow / Approval không phụ thuộc MCP; Gateway dùng nó qua interface"}
+            - {pkg: "github.com/hqgroups/mcp/internal/integration", desc: "Workflow không import integration"}
+            - {pkg: "github.com/hqgroups/mcp/internal/platform/secrets", desc: "Workflow không giữ credential"}
+            - {pkg: "github.com/hqgroups/mcp/internal/ai", desc: "Workflow không gọi LLM trực tiếp"}
+            - {pkg: "github.com/hqgroups/mcp/internal/agent/runtime", desc: "Workflow dùng Agent Runtime qua interface khai báo ở bên dùng (nối ở apiserver); chỉ kiểu Plan của agent/orchestrator được import"}
+            - {pkg: "github.com/hqgroups/mcp/internal/agent/catalog", desc: "Workflow không đọc Agent Catalog; Agent được kiểm ở mỗi lần chạy, bởi Agent Runtime"}
+        # Temporal SDK bị cô lập như MCP SDK (rủi ro R4): chỉ phần nối vòng lặp với
+        # Temporal và composition root của worker được import. tests/arch kiểm cả phía
+        # binary (gateway không link Temporal).
+        temporal-sdk:
+          files: ["!**/internal/agent/runtime/durable/**", "!**/internal/workerserver/**", "!**/internal/workflow/definitions/schedule/**", "!**/tests/**"]
+          deny:
+            - {pkg: "go.temporal.io", desc: "Temporal SDK chỉ dùng trong internal/agent/runtime/durable, internal/workflow/definitions/schedule (ADR-0015) và internal/workerserver"}
+        no-testutil-in-prod:
+          files: ["!**/*_test.go", "!**/internal/testutil/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/testutil", desc: "code sản phẩm không import package test"}
+        # Bộ test hợp đồng của integration (mcp-platform §7) là package test nằm cạnh
+        # các integration: chỉ file test được import nó.
+        no-integration-contract-in-prod:
+          files: ["!**/*_test.go", "!**/internal/integration/contract/**"]
+          deny:
+            - {pkg: "github.com/hqgroups/mcp/internal/integration/contract", desc: "bộ test hợp đồng chỉ dùng trong test của integration"}

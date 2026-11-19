@@ -1,0 +1,24 @@
+# Build context chỉ cần mã nguồn Go và mã nguồn giao diện (web/). Cấu hình và khoá KHÔNG được vào context (và vì thế
+# không thể vào một layer của image).
+.env
+.env.*
+**/.env
+**/.env.*
+.secrets
+**/.secrets
+**/*.key
+**/*.pem
+bin
+.git
+.claude
+.docs
+.vscode
+.idea
+deployments
+graphify-out
+tests
+**/testdata
+*.log
+# Giao diện được build lại trong image từ web/: không lấy node_modules hay bản build của máy.
+web/node_modules
+internal/webui/dist

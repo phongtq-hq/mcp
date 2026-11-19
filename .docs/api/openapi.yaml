@@ -1,0 +1,2272 @@
+openapi: 3.1.0
+info:
+  title: MCP Platform — Management API
+  version: 0.1.0
+  description: |
+    REST API quản trị của MCP Platform. Trạng thái: bản thiết kế, chờ xác nhận.
+
+    **Tách biệt với MCP.** API này chạy trên process `api` (`api.<domain>`).
+    Endpoint giao thức MCP chạy trên process `gateway` (`mcp.<domain>/mcp/v1/...`)
+    và không được mô tả ở đây; xem docs/architecture/mcp-platform.md.
+
+    **Tenant.** Organization được xác định từ token, không từ đường dẫn.
+    Tài nguyên thuộc project được tạo và liệt kê dưới `/projects/{projectId}/...`,
+    và được truy cập theo id ở đường dẫn gốc (`/agents/{agentId}`).
+
+    **Phiên bản.** Tiền tố `/v1`. Thay đổi phá vỡ tương thích tạo `/v2`;
+    thêm trường và thêm endpoint không tăng phiên bản. Client phải bỏ qua trường lạ.
+
+    **Phân trang.** Theo con trỏ: `limit` (mặc định 50, tối đa 200) và `cursor`.
+    Phản hồi có `next_cursor`; `null` nghĩa là hết.
+
+    **Lọc và sắp xếp.** Lọc bằng query parameter riêng cho từng trường.
+    Sắp xếp bằng `sort=<trường>` hoặc `sort=-<trường>` (giảm dần), chỉ trên các trường được liệt kê.
+
+    **Idempotency.** Mọi `POST` tạo tài nguyên hoặc kích hoạt hành động nhận header `Idempotency-Key`.
+    Gửi lại cùng key và cùng body trả về phản hồi ban đầu; cùng key khác body trả 422.
+    Bắt buộc với tạo execution, tạo workflow execution và quyết định approval.
+
+    **Đồng thời.** Tài nguyên sửa được trả `ETag`; `PATCH` và `DELETE` nhận `If-Match`, lệch trả 412.
+
+    **Lỗi.** Mọi lỗi dùng `application/problem+json` (RFC 9457) với trường `code` ổn định cho máy đọc.
+    Mã HTTP dùng chung: 400 sai cú pháp, 401 chưa xác thực, 403 không đủ quyền,
+    404 không tồn tại (kể cả tài nguyên của tenant khác), 409 xung đột trạng thái,
+    412 ETag lệch, 422 sai ngữ nghĩa, 402 vượt budget, 429 quá giới hạn (kèm `Retry-After`).
+servers:
+  - url: https://api.example.com/v1
+security:
+  - oidc: []
+  - apiKey: []
+tags:
+  - name: Organization
+  - name: Projects
+  - name: Agents
+  - name: API Keys
+  - name: Executions
+  - name: MCP
+  - name: Workflows
+  - name: Approvals
+  - name: Models
+  - name: Cost
+  - name: Audit
+
+paths:
+  /organization:
+    get:
+      tags: [Organization]
+      operationId: getOrganization
+      summary: Organization của người gọi
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Organization'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Organization]
+      operationId: updateOrganization
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OrganizationUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Organization'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /projects:
+    get:
+      tags: [Projects]
+      operationId: listProjects
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: environment, in: query, schema: {$ref: '#/components/schemas/Environment'}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, -name, created_at, -created_at], default: -created_at}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Project'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Projects]
+      operationId: createProject
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Project'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /projects/{projectId}:
+    parameters: [{$ref: '#/components/parameters/ProjectId'}]
+    get:
+      tags: [Projects]
+      operationId: getProject
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Project'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Projects]
+      operationId: updateProject
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProjectUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Project'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Projects]
+      operationId: archiveProject
+      summary: Lưu trữ project (xoá mềm)
+      responses:
+        '204': {description: Archived}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /projects/{projectId}/agents:
+    parameters: [{$ref: '#/components/parameters/ProjectId'}]
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/AgentStatus'}}
+        - {name: q, in: query, description: Tìm theo tên hoặc slug, schema: {type: string}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, -name, created_at, -created_at], default: name}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Agent'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Agents]
+      operationId: createAgent
+      summary: Tạo Agent ở trạng thái draft, kèm version đầu tiên
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AgentCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Agent'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /agents/{agentId}:
+    parameters: [{$ref: '#/components/parameters/AgentId'}]
+    get:
+      tags: [Agents]
+      operationId: getAgent
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Agent'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Agents]
+      operationId: updateAgent
+      summary: Sửa tên, mô tả hoặc trạng thái (active / disabled). Không sửa cấu hình; cấu hình đổi bằng version mới
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AgentUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Agent'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Agents]
+      operationId: archiveAgent
+      responses:
+        '204': {description: Archived}
+        default: {$ref: '#/components/responses/Problem'}
+  /agents/{agentId}/versions:
+    parameters: [{$ref: '#/components/parameters/AgentId'}]
+    get:
+      tags: [Agents]
+      operationId: listAgentVersions
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/AgentVersion'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Agents]
+      operationId: createAgentVersion
+      summary: Tạo version bất biến mới. Được validate với Tool Registry và quyền của project
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AgentVersionCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AgentVersion'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /agents/{agentId}/versions/{version}:
+    parameters:
+      - {$ref: '#/components/parameters/AgentId'}
+      - {name: version, in: path, required: true, schema: {type: integer, minimum: 1}}
+    get:
+      tags: [Agents]
+      operationId: getAgentVersion
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AgentVersion'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /agents/{agentId}/active-version:
+    parameters: [{$ref: '#/components/parameters/AgentId'}]
+    put:
+      tags: [Agents]
+      operationId: setActiveAgentVersion
+      summary: Publish hoặc rollback bằng cách chọn version đang hoạt động
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [version], properties: {version: {type: integer, minimum: 1}}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Agent'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /api-keys:
+    get:
+      tags: [API Keys]
+      operationId: listApiKeys
+      summary: Liệt kê API key của organization (chỉ metadata)
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/ApiKey'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [API Keys]
+      operationId: createApiKey
+      summary: Tạo API key cho máy / CI
+      description: |
+        Giá trị của khoá (`key`) chỉ được trả về trong phản hồi này và không lấy lại được.
+        Endpoint này không nhận `Idempotency-Key`: phản hồi chứa secret nên không được lưu để phát lại.
+        Chỉ người dùng tạo được khoá. Role của khoá phải là role dựng sẵn và không được chứa
+        permission mà người tạo không có ở cùng phạm vi.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyCreated'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /api-keys/{apiKeyId}:
+    parameters: [{name: apiKeyId, in: path, required: true, schema: {type: string, format: uuid}}]
+    delete:
+      tags: [API Keys]
+      operationId: revokeApiKey
+      summary: Thu hồi API key (có hiệu lực ngay; lặp lại là no-op)
+      responses:
+        '204': {description: No Content}
+        default: {$ref: '#/components/responses/Problem'}
+  /projects/{projectId}/executions:
+    parameters: [{$ref: '#/components/parameters/ProjectId'}]
+    get:
+      tags: [Executions]
+      operationId: listExecutions
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/ExecutionStatus'}}
+        - {name: agent_id, in: query, schema: {type: string, format: uuid}}
+        - {name: session_id, in: query, schema: {type: string, format: uuid}}
+        - {name: initiator_id, in: query, schema: {type: string, format: uuid}}
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/To'}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, -created_at, estimated_cost, -estimated_cost], default: -created_at}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Execution'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Executions]
+      operationId: createExecution
+      summary: Khởi tạo execution (bất đồng bộ)
+      description: |
+        Trả 202 ngay sau khi execution được xếp hàng. Theo dõi bằng `GET /executions/{id}`
+        hoặc luồng sự kiện `/executions/{id}/events`.
+        Trả 402 với `code: budget_exceeded` nếu một budget áp dụng đã chạm ngưỡng cứng.
+        Với `mode planned`: 422 `planned_not_enabled` nếu project chưa bật chế độ này
+        (`settings.orchestration`, xem OrchestrationSettings), 422 `orchestration_config_invalid`
+        nếu cấu hình đã lưu bị hỏng, 422 `validation_failed` nếu kế hoạch không hợp lệ. Mỗi task
+        của kế hoạch phải có budget. 429 nếu organization đã đủ số vòng lặp Agent chạy đồng thời
+        (execution `planned` chiếm số task nó chạy song song).
+      parameters: [{$ref: '#/components/parameters/IdempotencyKeyRequired'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExecutionCreate'}}}}
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    get:
+      tags: [Executions]
+      operationId: getExecution
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/cancel:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    post:
+      tags: [Executions]
+      operationId: cancelExecution
+      summary: Huỷ execution; lan tới mọi task con và approval đang chờ. Idempotent
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/pause:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    post:
+      tags: [Executions]
+      operationId: pauseExecution
+      summary: Tạm dừng tại ranh giới step kế tiếp
+      description: |
+        Ghi yêu cầu tạm dừng (quyền `execution:cancel`). Mỗi task dừng ở ranh giới bước kế tiếp
+        của nó: bước đang chạy (lượt model, tool call, kể cả tool vừa được duyệt) được chạy xong.
+        Execution sang `paused` khi vòng lặp thực sự dừng. Thời gian tạm dừng vẫn tính vào hạn
+        của execution. Idempotent. 409 `execution_finished` nếu execution đã kết thúc.
+        Tạm dừng là công cụ vận hành dựa vào sự hợp tác của vòng lặp, không phải kiểm soát an
+        toàn: muốn chắc chắn không bước nào chạy nữa thì huỷ execution.
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/resume:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    post:
+      tags: [Executions]
+      operationId: resumeExecution
+      summary: Gỡ yêu cầu tạm dừng; execution chạy tiếp đúng chỗ đã dừng. Idempotent
+      description: |
+        Người đã yêu cầu tạm dừng tự gỡ được yêu cầu của mình (quyền `execution:cancel`). Gỡ yêu
+        cầu tạm dừng của người khác cần thêm quyền `execution:resume`.
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/events:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    get:
+      tags: [Executions]
+      operationId: streamExecutionEvents
+      summary: Luồng sự kiện (SSE) về thay đổi trạng thái, step và approval
+      description: |
+        Server-Sent Events (quyền `execution:read`). Mỗi lần nối, luồng phát trạng thái hiện tại
+        rồi tới từng thay đổi, và đóng khi execution kết thúc. Sự kiện:
+        `task` (`id`, `status`, `plan_key`, `parent_task_id`, `agent_id`, `depth`),
+        `step` (`task_id`, `step_seq`, `kind`, `status`, `tool_name`, `approval_id`),
+        `execution` (`id`, `status`, `estimated_cost`, `pause_requested_at`, `cancel_requested`,
+        `finished_at`), `end` (execution đã kết thúc; luồng đóng), `reconnect` (luồng đã sống
+        tối đa 5 phút; nối lại), `error`. Sự kiện `execution` của một nhịp đi sau `task` và
+        `step` của nhịp đó. Sự kiện chỉ mang định danh và trạng thái: không có prompt, arguments
+        hay kết quả tool. Không hỗ trợ `Last-Event-ID`: nối lại là được phát lại từ đầu.
+        Thay đổi được đọc theo nhịp khoảng một giây. 429 khi có quá nhiều luồng đang mở (tối đa
+        4 mỗi người gọi, 16 mỗi organization). Quyền đọc được kiểm lại định kỳ trong lúc luồng mở.
+      responses:
+        '200': {description: Luồng sự kiện, content: {text/event-stream: {schema: {type: string}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /projects/{projectId}/plan-proposals:
+    parameters: [{$ref: '#/components/parameters/ProjectId'}]
+    post:
+      tags: [Executions]
+      operationId: createPlanProposal
+      summary: Nhờ Agent lập kế hoạch đề xuất một kế hoạch (bất đồng bộ)
+      description: |
+        Chạy Agent lập kế hoạch của project (`settings.orchestration.planner_agent_id`) như một
+        execution `single_agent`: nó nhận yêu cầu và danh sách các Agent đang hoạt động của
+        project, và trả lời bằng một kế hoạch. Kết quả là một ĐỀ XUẤT: không task nào của kế
+        hoạch được chạy. Đọc đề xuất bằng `GET /executions/{id}/plan`, rồi gửi nó (nguyên văn
+        hoặc đã sửa) qua `POST /projects/{id}/executions` với `mode: planned`; ở đó kế hoạch
+        được kiểm lại như mọi kế hoạch khác.
+        Đề xuất là output của model: đầu vào không tin cậy. Chỉ gửi lại nguyên văn khi đã có
+        người xem; để chạy tự động, dùng `POST /executions/{id}/plan/run`.
+        422 `planned_not_enabled` nếu project chưa bật chế độ planned; 422
+        `planner_not_configured` nếu chưa đặt Agent lập kế hoạch; 422 `planner_unavailable` nếu
+        nó không thuộc project hoặc không hoạt động; 422 `planner_not_eligible` nếu Agent Version
+        của nó có tool, có delegation, hoặc thiếu `limits.budget`.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKeyRequired'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlanProposalCreate'}}}}
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/plan:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    get:
+      tags: [Executions]
+      operationId: getExecutionPlanProposal
+      summary: Kế hoạch mà một execution lập kế hoạch đã đề xuất
+      description: |
+        Đọc trả lời của Agent lập kế hoạch và kiểm nó bằng code: đúng định dạng, Agent được nêu
+        thuộc project, phụ thuộc tồn tại, không chu trình, trong trần số task và độ sâu. Kế hoạch
+        không hợp lệ được báo kèm lý do, không được sửa giúp. `plan` chỉ có khi `status` là `ready`.
+        Chỉ execution được tạo bằng `POST /projects/{id}/plan-proposals` mới cho ra đề xuất, và
+        kế hoạch chỉ được dùng các Agent đã chọn lúc đề xuất. `ready` nghĩa là đúng cấu trúc,
+        không phải nội dung đã được ai xem.
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PlanProposal'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/plan/run:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    post:
+      tags: [Executions]
+      operationId: runPlanProposal
+      summary: Chạy kế hoạch mà một execution lập kế hoạch đã đề xuất
+      description: |
+        Tạo một execution `planned` thẳng từ đề xuất, ở phía platform (quyền `execution:create`).
+        Kế hoạch được kiểm đầy đủ như mọi kế hoạch, và platform ghi nhận nguồn gốc của nó là
+        model: `goal` của từng task được đánh dấu là do Agent lập kế hoạch viết, và tool không
+        chỉ đọc của các task đó **luôn cần người duyệt**. Dùng đường này khi không có người xem
+        lại đề xuất. Tự đọc đề xuất rồi gửi lại qua `mode: planned` thì kế hoạch được xử lý như
+        kế hoạch do người gọi viết.
+        Chỉ người đã tạo đề xuất mới chạy được nó (403 với người khác), trong vòng 24 giờ (422
+        `plan_expired` sau đó): người chạy trở thành người yêu cầu của các approval, và không ai
+        viết yêu cầu rồi để người khác chạy để tự duyệt.
+        409 `plan_not_ready` nếu lần lập kế hoạch chưa kết thúc; 422 `plan_invalid` nếu đề xuất
+        không hợp lệ.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKeyRequired'}]
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/PlanProposalRun'}}}}
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Execution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /executions/{executionId}/tasks:
+    parameters: [{$ref: '#/components/parameters/ExecutionId'}]
+    get:
+      tags: [Executions]
+      operationId: listExecutionTasks
+      summary: Cây task của execution
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Task'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /tasks/{taskId}:
+    parameters: [{$ref: '#/components/parameters/TaskId'}]
+    get:
+      tags: [Executions]
+      operationId: getTask
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /tasks/{taskId}/steps:
+    parameters: [{$ref: '#/components/parameters/TaskId'}]
+    get:
+      tags: [Executions]
+      operationId: listTaskSteps
+      summary: Nhật ký step. Nội dung request / response cần quyền `execution:read_content` và có thể đã hết hạn lưu giữ
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: kind, in: query, schema: {$ref: '#/components/schemas/StepKind'}}
+        - {name: include_content, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Step'}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /mcp-servers:
+    get:
+      tags: [MCP]
+      operationId: listMcpServers
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: kind, in: query, schema: {type: string, enum: [managed, external]}}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/McpServerStatus'}}
+        - {name: health_status, in: query, schema: {$ref: '#/components/schemas/HealthStatus'}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, -name, created_at, -created_at], default: name}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/McpServer'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [MCP]
+      operationId: registerMcpServer
+      summary: Đăng ký MCP server
+      description: |
+        Endpoint được kiểm tra chống SSRF. Transport `stdio` chỉ dành cho platform admin.
+        Sau khi đăng ký, discovery chạy bất đồng bộ và tạo version đầu tiên ở `pending_review`.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/McpServerCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/McpServer'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-servers/{serverId}:
+    parameters: [{$ref: '#/components/parameters/ServerId'}]
+    get:
+      tags: [MCP]
+      operationId: getMcpServer
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/McpServer'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [MCP]
+      operationId: updateMcpServer
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/McpServerUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/McpServer'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [MCP]
+      operationId: archiveMcpServer
+      summary: Lưu trữ. Trả 409 nếu còn Agent Version đang hoạt động tham chiếu
+      responses:
+        '204': {description: Archived}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-servers/{serverId}/discover:
+    parameters: [{$ref: '#/components/parameters/ServerId'}]
+    post:
+      tags: [MCP]
+      operationId: discoverMcpServer
+      summary: Chạy discovery ngay; tạo version mới nếu định nghĩa thay đổi
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/McpServer'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-servers/{serverId}/versions:
+    parameters: [{$ref: '#/components/parameters/ServerId'}]
+    get:
+      tags: [MCP]
+      operationId: listMcpServerVersions
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: review_status, in: query, schema: {$ref: '#/components/schemas/ReviewStatus'}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/McpServerVersion'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-servers/{serverId}/versions/{version}/review:
+    parameters:
+      - {$ref: '#/components/parameters/ServerId'}
+      - {name: version, in: path, required: true, schema: {type: integer, minimum: 1}}
+    post:
+      tags: [MCP]
+      operationId: reviewMcpServerVersion
+      summary: Duyệt hoặc từ chối thay đổi định nghĩa tool. Duyệt sẽ kích hoạt version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: {type: string, enum: [approved, rejected]}
+                comment: {type: string}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/McpServerVersion'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-servers/{serverId}/tools:
+    parameters: [{$ref: '#/components/parameters/ServerId'}]
+    get:
+      tags: [MCP]
+      operationId: listMcpServerTools
+      summary: Tool của version đang hoạt động
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: risk_level, in: query, schema: {$ref: '#/components/schemas/RiskLevel'}}
+        - {name: enabled, in: query, schema: {type: boolean}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/McpTool'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-tools:
+    get:
+      tags: [MCP]
+      operationId: searchMcpTools
+      summary: Tìm tool trên mọi server mà người gọi được thấy
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: server_id, in: query, schema: {type: string, format: uuid}}
+        - {name: risk_level, in: query, schema: {$ref: '#/components/schemas/RiskLevel'}}
+        - {name: enabled, in: query, schema: {type: boolean}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/McpTool'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /mcp-tools/{toolId}:
+    parameters: [{name: toolId, in: path, required: true, schema: {type: string, format: uuid}}]
+    get:
+      tags: [MCP]
+      operationId: getMcpTool
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/McpTool'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [MCP]
+      operationId: updateMcpToolPolicy
+      summary: Sửa thuộc tính chính sách của tool (bật / tắt, mức rủi ro, giới hạn). Định nghĩa tool không sửa được
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/McpToolPolicyUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/McpTool'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /projects/{projectId}/workflows:
+    parameters: [{$ref: '#/components/parameters/ProjectId'}]
+    get:
+      tags: [Workflows]
+      operationId: listWorkflows
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/WorkflowStatus'}}
+      responses:
+        '200':
+          description: OK (mới nhất trước; workflow đã lưu trữ chỉ hiện khi lọc `status=archived`)
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Workflow'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Workflows]
+      operationId: createWorkflow
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Workflow'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /workflows/{workflowId}:
+    parameters: [{$ref: '#/components/parameters/WorkflowId'}]
+    get:
+      tags: [Workflows]
+      operationId: getWorkflow
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Workflow'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Workflows]
+      operationId: updateWorkflow
+      summary: Sửa workflow; thay đổi `definition` làm tăng `version`
+      description: |
+        Quyền `workflow:write`. Lần chạy đang chạy giữ bản chụp định nghĩa của nó.
+
+        Người chạy của workflow là người chịu trách nhiệm về thứ nó chạy theo lịch: lần chạy
+        theo lịch mang quyền của người đó. Đổi `status` sang `active` (kể cả khi đã `active`),
+        và mọi thay đổi `definition` / `schedule` của một workflow đang `active`, ghi người
+        gọi làm người chạy. Thao tác đó cần thêm `workflow:run` và `execution:create` (403),
+        và người gọi phải là user: API key nhận 422. Sửa `name` / `description` không đổi
+        người chạy.
+
+        `schedule` là cron 5 trường số, giờ UTC, không macro, không dày hơn 5 phút một lần
+        (422). Tối đa 50 workflow đang có lịch mỗi organization (409 `schedule_limit_reached`).
+        Workflow đã lưu trữ không sửa được (409 `workflow_archived`). Lưu được nhưng chưa
+        đồng bộ được lịch: 503 `schedule_unavailable`, gửi lại yêu cầu.
+
+        Workflow có lịch bị từ chối ba lần kích hoạt liên tiếp (người chạy mất quyền, Agent bị
+        tắt, định nghĩa không còn chạy được…) tự về `disabled`; kích hoạt lại để chạy tiếp.
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Workflow'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Workflows]
+      operationId: archiveWorkflow
+      responses:
+        '204': {description: Archived}
+        default: {$ref: '#/components/responses/Problem'}
+  /workflows/{workflowId}/executions:
+    parameters: [{$ref: '#/components/parameters/WorkflowId'}]
+    get:
+      tags: [Workflows]
+      operationId: listWorkflowExecutions
+      description: |
+        Quyền `workflow:read` và `execution:read` (lần chạy mang `input` / `output` của
+        execution). Mới nhất trước. Trạng thái của tối đa 20 lần chạy chưa kết thúc trong
+        trang được đọc lại từ execution của chúng; phần còn lại là trạng thái đã lưu.
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/WorkflowExecutionStatus'}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/WorkflowExecution'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Workflows]
+      operationId: startWorkflowExecution
+      summary: Chạy workflow (bất đồng bộ)
+      description: |
+        Quyền `workflow:run` và `execution:create`. Chỉ workflow `active` chạy được (409
+        `workflow_not_active`). Lần chạy là một execution `planned` mang quyền của người gọi;
+        theo dõi nó qua `execution_id` (task, step, luồng sự kiện, tạm dừng, approval).
+        Project phải bật `settings.orchestration.planned_enabled`. Lần chạy không tạo được
+        execution (Agent bị tắt, vượt trần…) được ghi `failed` kèm lý do, và request nhận lỗi đó.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKeyRequired'}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    message: {type: string, maxLength: 2000, description: Ghi chú của lần chạy; không đi vào goal của bước nào}
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowExecution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /workflow-executions/{workflowExecutionId}:
+    parameters: [{$ref: '#/components/parameters/WorkflowExecutionId'}]
+    get:
+      tags: [Workflows]
+      operationId: getWorkflowExecution
+      description: Quyền `workflow:read` và `execution:read`. Trạng thái được đọc lại từ execution của lần chạy.
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowExecution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /workflow-executions/{workflowExecutionId}/cancel:
+    parameters: [{$ref: '#/components/parameters/WorkflowExecutionId'}]
+    post:
+      tags: [Workflows]
+      operationId: cancelWorkflowExecution
+      summary: Huỷ một lần chạy (huỷ execution của nó)
+      description: |
+        Quyền `workflow:run` và `execution:cancel`. Trạng thái đổi thành `cancelled` khi
+        execution thực sự dừng. Chưa có compensation (ADR-0015).
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/WorkflowExecution'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /notification-webhook:
+    get:
+      tags: [Approvals]
+      operationId: getNotificationWebhook
+      summary: Đọc webhook nhận thông báo của organization (không trả khoá ký)
+      description: Quyền `notification_webhook:read`. Chưa cấu hình thì 404.
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationWebhook'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    put:
+      tags: [Approvals]
+      operationId: putNotificationWebhook
+      summary: Đặt hoặc thay webhook nhận thông báo; sinh khoá ký mới
+      description: |
+        Quyền `notification_webhook:write`. Mỗi organization một webhook. Mỗi lần gọi sinh một
+        khoá ký mới (`signing_secret`), chỉ trả về trong phản hồi này; khoá cũ hết hiệu lực.
+        Endpoint không nhận `Idempotency-Key` vì phản hồi chứa secret. `url` đi qua kiểm tra
+        chống SSRF (https, cổng 443 / 8443, địa chỉ công khai, không có userinfo hay query string)
+        lúc ghi và ở mỗi lần gửi.
+
+        Sự kiện hiện có: `approval.requested`, gửi khi một approval được tạo. Thân request là
+        JSON chỉ mang định danh (`approval_id`, `project_id`, `execution_id`, `subject_type`,
+        `risk_level`, `required_approvals`, `expires_at`); bên nhận đọc chi tiết qua
+        `GET /v1/approvals/{id}` bằng credential của chính nó. Header
+        `X-HQ-Signature: t=<unix>,v1=<hex>` với `v1 = HMAC-SHA256(signing_secret, "<t>.<thân>")`;
+        Bên nhận nên: so sánh chữ ký bằng phép so hằng thời gian; từ chối `t` lệch quá 5 phút so
+        với đồng hồ của mình (chống phát lại); khử trùng theo `id` trong thân (một sự kiện có thể
+        tới hơn một lần). Header `X-HQ-Delivery` mang cùng giá trị nhưng KHÔNG được ký: chỉ để tra cứu.
+        Khoá HMAC là nguyên chuỗi `whsec_…` (không giải base64).
+        Phản hồi 2xx trong 5 giây là thành công; ngược lại thử lại tối đa 6 lần trong khoảng 15 phút.
+        Sau 20 thông báo hỏng hẳn liên tiếp webhook bị tắt (`disabled_reason: delivery_failures`);
+        gọi lại `PUT` để bật.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationWebhookPut'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationWebhookCreated'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Approvals]
+      operationId: deleteNotificationWebhook
+      summary: Gỡ webhook (lặp lại là no-op); thông báo còn chờ bị bỏ
+      responses:
+        '204': {description: No Content}
+        default: {$ref: '#/components/responses/Problem'}
+  /notification-webhook/deliveries:
+    get:
+      tags: [Approvals]
+      operationId: listNotificationDeliveries
+      summary: Lịch sử gửi thông báo (mới nhất trước)
+      description: Quyền `notification_webhook:read`.
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/NotificationDelivery'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/ApprovalStatus'}}
+        - {name: project_id, in: query, schema: {type: string, format: uuid}}
+        - {name: execution_id, in: query, schema: {type: string, format: uuid}}
+        - {name: assigned_to_me, in: query, description: Chỉ approval mà người gọi có quyền quyết định, schema: {type: boolean}}
+        - {name: sort, in: query, schema: {type: string, enum: [expires_at, -created_at], default: expires_at}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Approval'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /approvals/{approvalId}:
+    parameters: [{$ref: '#/components/parameters/ApprovalId'}]
+    get:
+      tags: [Approvals]
+      operationId: getApproval
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Approval'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /approvals/{approvalId}/decisions:
+    parameters: [{$ref: '#/components/parameters/ApprovalId'}]
+    post:
+      tags: [Approvals]
+      operationId: decideApproval
+      summary: Duyệt hoặc từ chối
+      description: |
+        Trả 403 nếu người gọi là người yêu cầu hoặc thiếu quyền `approval:decide`.
+        Trả 409 nếu approval không còn `pending`, hoặc người gọi đã quyết định approval này rồi
+        (`already_decided`). Approval có `required_approvals` lớn hơn 1 vẫn `pending` sau một
+        quyết định `approve` cho tới khi đủ số người duyệt khác nhau; một quyết định `reject`
+        từ chối ngay. Mức `financial` yêu cầu token vừa được xác thực lại.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKeyRequired'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: {type: string, enum: [approve, reject]}
+                comment: {type: string, maxLength: 2000}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Approval'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /model-providers:
+    get:
+      tags: [Models]
+      operationId: listModelProviders
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/ModelProvider'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Models]
+      operationId: createModelProvider
+      summary: Thêm provider. API key được gửi một lần, lưu mã hoá, không bao giờ trả lại
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelProviderCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ModelProvider'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /model-providers/{providerId}:
+    parameters: [{$ref: '#/components/parameters/ProviderId'}]
+    get:
+      tags: [Models]
+      operationId: getModelProvider
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/ModelProvider'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Models]
+      operationId: updateModelProvider
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelProviderUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/ModelProvider'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Models]
+      operationId: deleteModelProvider
+      summary: Trả 409 nếu còn Agent Version đang hoạt động dùng model của provider
+      responses:
+        '204': {description: Deleted}
+        default: {$ref: '#/components/responses/Problem'}
+  /models:
+    get:
+      tags: [Models]
+      operationId: listModels
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: provider_id, in: query, schema: {type: string, format: uuid}}
+        - {name: tier, in: query, schema: {$ref: '#/components/schemas/ModelTier'}}
+        - {name: enabled, in: query, schema: {type: boolean}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Model'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Models]
+      operationId: createModel
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Model'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /models/{modelId}:
+    parameters: [{$ref: '#/components/parameters/ModelId'}]
+    get:
+      tags: [Models]
+      operationId: getModel
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Model'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Models]
+      operationId: updateModel
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Model'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /models/{modelId}/pricing:
+    parameters: [{$ref: '#/components/parameters/ModelId'}]
+    get:
+      tags: [Models]
+      operationId: listModelPricing
+      summary: Lịch sử giá, mới nhất trước
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: effective_at, in: query, description: Chỉ trả giá hiệu lực tại thời điểm này, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/ModelPricing'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Models]
+      operationId: createModelPricing
+      summary: Thêm phiên bản giá. Giá đang hiệu lực được đóng tại `effective_from` của giá mới
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelPricingCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ModelPricing'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /budgets:
+    get:
+      tags: [Cost]
+      operationId: listBudgets
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: scope_type, in: query, schema: {$ref: '#/components/schemas/BudgetScope'}}
+        - {name: scope_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/Budget'}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [Cost]
+      operationId: createBudget
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BudgetCreate'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Budget'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /budgets/{budgetId}:
+    parameters: [{name: budgetId, in: path, required: true, schema: {type: string, format: uuid}}]
+    get:
+      tags: [Cost]
+      operationId: getBudget
+      summary: Budget kèm mức sử dụng của kỳ hiện tại
+      description: >-
+        `current_period.spent` lấy từ usage ledger. `reserved` (phần đang đặt trước của các lượt gọi
+        đang chạy) nằm ở bộ đếm của Gateway và hiện không được trả về. Budget phạm vi `user` chỉ áp cho
+        execution do chính user khởi tạo; execution khởi tạo bằng API key không tiêu vào budget user
+        của người tạo key. Kỳ `total` cộng trên phần usage ledger còn được giữ (retention).
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Budget'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [Cost]
+      operationId: updateBudget
+      description: >-
+        Sửa hạn mức, ngưỡng mềm, hành vi khi vượt, hoặc bật / tắt. Phạm vi và chu kỳ không sửa được
+        (tạo budget mới). `soft_threshold_pct: null` bỏ ngưỡng mềm; không gửi trường này thì giữ nguyên.
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BudgetUpdate'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Budget'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [Cost]
+      operationId: deleteBudget
+      responses:
+        '204': {description: Deleted}
+        default: {$ref: '#/components/responses/Problem'}
+  /usage/summary:
+    get:
+      tags: [Cost]
+      operationId: getUsageSummary
+      summary: Tổng hợp token và chi phí ước tính, nhóm theo một hoặc nhiều chiều
+      description: |
+        Quyền `usage:read` cấp organization; khi lọc theo `project_id`, quyền `usage:read` trên
+        project đó là đủ. Khoảng thời gian tối đa 92 ngày. Tối đa 500 nhóm, xếp theo chi phí giảm
+        dần; còn nhóm bị cắt thì `truncated` là true (`totals` luôn là tổng của cả khoảng). Chỉ cộng
+        chi phí USD; lượt gọi chưa có giá (hoặc có giá không phải USD) được đếm ở `unpriced_calls`
+        và không góp vào chi phí. `group_by=user` và bộ lọc `user_id` luôn cần quyền cấp
+        organization. `project_id` không có trong organization: 404. Tối đa 4 báo cáo chạy cùng
+        lúc mỗi process (429 `rate_limited`); mỗi truy vấn có hạn 15 giây.
+        Chiều `workflow` và `tool` hiện luôn là null (usage của lượt model chưa ghi hai cột này).
+      parameters:
+        - {$ref: '#/components/parameters/FromRequired'}
+        - {$ref: '#/components/parameters/ToRequired'}
+        - name: group_by
+          in: query
+          description: Tối đa 2 chiều
+          style: form
+          explode: false
+          schema:
+            type: array
+            maxItems: 2
+            items: {type: string, enum: [project, user, agent, model, provider, workflow, tool, purpose]}
+        - {name: project_id, in: query, schema: {type: string, format: uuid}}
+        - {name: agent_id, in: query, schema: {type: string, format: uuid}}
+        - {name: model_id, in: query, schema: {type: string, format: uuid}}
+        - {name: user_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/UsageSummary'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /usage/timeseries:
+    get:
+      tags: [Cost]
+      operationId: getUsageTimeseries
+      summary: Chuỗi thời gian theo ngày hoặc tháng, kèm dự báo cuối kỳ
+      description: |
+        Quyền và trần tải như `/usage/summary`. Mốc thời gian theo UTC; chỉ kỳ có usage mới có
+        điểm, và kỳ đầu / cuối không trọn nếu `from` / `to` không nằm trên biên ngày / tháng. Khoảng tối đa 92 ngày với `interval=day`,
+        400 ngày với `interval=month`. Tối đa 5000 điểm; vượt thì 422 (thu hẹp khoảng hoặc bỏ `group_by`).
+        `include_forecast=true` thêm dự báo chi phí tới hết tháng hiện tại (UTC) của các bộ lọc đang
+        dùng, không theo `group_by`: `projected_cost` = chi phí từ đầu tháng tới giờ + tốc độ trung
+        bình mỗi ngày (các ngày đã trọn của tháng) × số ngày còn lại; `low` / `high` dùng ngày thấp
+        nhất / cao nhất. Là phép ngoại suy tuyến tính, không phải cam kết. `forecast` là null khi
+        tháng chưa có ngày trọn nào.
+      parameters:
+        - {$ref: '#/components/parameters/FromRequired'}
+        - {$ref: '#/components/parameters/ToRequired'}
+        - {name: interval, in: query, schema: {type: string, enum: [day, month], default: day}}
+        - {name: group_by, in: query, schema: {type: string, enum: [project, agent, model, provider]}}
+        - {name: project_id, in: query, schema: {type: string, format: uuid}}
+        - {name: agent_id, in: query, schema: {type: string, format: uuid}}
+        - {name: include_forecast, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/UsageTimeseries'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /usage/records:
+    get:
+      tags: [Cost]
+      operationId: listUsageRecords
+      summary: Bản ghi usage thô
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/FromRequired'}
+        - {$ref: '#/components/parameters/ToRequired'}
+        - {name: execution_id, in: query, schema: {type: string, format: uuid}}
+        - {name: agent_id, in: query, schema: {type: string, format: uuid}}
+        - {name: model_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/UsageRecord'}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /costs/reconciliation:
+    get:
+      tags: [Cost]
+      operationId: listCostReconciliation
+      summary: Chi phí thực từ provider so với ước tính
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/FromRequired'}
+        - {$ref: '#/components/parameters/ToRequired'}
+        - {name: provider_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/CostRecord'}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAuditLogs
+      summary: Chỉ đọc. Không có endpoint ghi, sửa hay xoá
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/To'}
+        - {name: actor_id, in: query, schema: {type: string, format: uuid}}
+        - {name: actor_type, in: query, schema: {type: string, enum: [user, api_key, agent, system]}}
+        - {name: action, in: query, description: 'Khớp tiền tố, ví dụ `mcp_tool.`', schema: {type: string}}
+        - {name: resource_type, in: query, schema: {type: string}}
+        - {name: resource_id, in: query, schema: {type: string, format: uuid}}
+        - {name: execution_id, in: query, schema: {type: string, format: uuid}}
+        - {name: outcome, in: query, schema: {type: string, enum: [success, denied, error]}}
+        - {name: project_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf: [{$ref: '#/components/schemas/Page'}]
+                properties: {data: {type: array, items: {$ref: '#/components/schemas/AuditLog'}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://idp.example.com/.well-known/openid-configuration
+    apiKey:
+      type: http
+      scheme: bearer
+      description: "API key phạm vi project, gửi dạng `Authorization: Bearer hq_...`"
+
+  parameters:
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+    Cursor: {name: cursor, in: query, description: Giá trị `next_cursor` của trang trước, schema: {type: string}}
+    From: {name: from, in: query, schema: {type: string, format: date-time}}
+    To: {name: to, in: query, schema: {type: string, format: date-time}}
+    FromRequired: {name: from, in: query, required: true, schema: {type: string, format: date-time}}
+    ToRequired: {name: to, in: query, required: true, schema: {type: string, format: date-time}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, schema: {type: string, maxLength: 255}}
+    IdempotencyKeyRequired: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 255}}
+    IfMatch: {name: If-Match, in: header, schema: {type: string}}
+    ProjectId: {name: projectId, in: path, required: true, schema: {type: string, format: uuid}}
+    AgentId: {name: agentId, in: path, required: true, schema: {type: string, format: uuid}}
+    ExecutionId: {name: executionId, in: path, required: true, schema: {type: string, format: uuid}}
+    TaskId: {name: taskId, in: path, required: true, schema: {type: string, format: uuid}}
+    ServerId: {name: serverId, in: path, required: true, schema: {type: string, format: uuid}}
+    WorkflowId: {name: workflowId, in: path, required: true, schema: {type: string, format: uuid}}
+    WorkflowExecutionId: {name: workflowExecutionId, in: path, required: true, schema: {type: string, format: uuid}}
+    ApprovalId: {name: approvalId, in: path, required: true, schema: {type: string, format: uuid}}
+    ProviderId: {name: providerId, in: path, required: true, schema: {type: string, format: uuid}}
+    ModelId: {name: modelId, in: path, required: true, schema: {type: string, format: uuid}}
+
+  responses:
+    Problem:
+      description: Lỗi
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string}
+        code:
+          type: string
+          description: Mã ổn định cho máy đọc
+          examples: [validation_failed, permission_denied, budget_exceeded, approval_required, idempotency_conflict, rate_limited]
+        trace_id: {type: string}
+        errors:
+          type: array
+          description: Chi tiết theo trường, với lỗi validate
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: {type: string}
+              code: {type: string}
+              message: {type: string}
+    Page:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data: {type: array, items: {}}
+        next_cursor: {type: [string, 'null']}
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: {type: string, description: Số thập phân dạng chuỗi để không mất độ chính xác, examples: ['12.50000000']}
+        currency: {type: string, minLength: 3, maxLength: 3, examples: [USD]}
+    Timestamps:
+      type: object
+      properties:
+        created_at: {type: string, format: date-time, readOnly: true}
+        updated_at: {type: string, format: date-time, readOnly: true}
+
+    Environment: {type: string, enum: [prod, non_prod]}
+    AgentStatus: {type: string, enum: [draft, active, disabled, archived]}
+    ExecutionStatus:
+      type: string
+      enum: [queued, running, waiting_approval, paused, completed, failed, cancelled, budget_exceeded, timed_out]
+    TaskStatus:
+      type: string
+      enum: [queued, running, waiting_approval, paused, completed, failed, cancelled, budget_exceeded, timed_out, skipped]
+    StepKind: {type: string, enum: [llm_call, tool_call, approval_wait, delegation, summarization]}
+    McpServerStatus: {type: string, enum: [registered, active, disabled, archived]}
+    HealthStatus: {type: string, enum: [unknown, healthy, degraded, unreachable]}
+    ReviewStatus: {type: string, enum: [pending_review, approved, rejected]}
+    RiskLevel: {type: string, enum: [read, write, destructive, financial]}
+    WorkflowStatus: {type: string, enum: [draft, active, disabled, archived]}
+    WorkflowExecutionStatus:
+      type: string
+      enum: [queued, running, waiting_approval, paused, completed, failed, cancelled, budget_exceeded, timed_out, compensating, compensated]
+    ApprovalStatus: {type: string, enum: [pending, approved, rejected, expired, cancelled, consumed]}
+    ModelTier: {type: string, enum: [economy, standard, premium]}
+    BudgetScope: {type: string, enum: [organization, project, user, agent]}
+
+    Organization:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, slug, name, status]
+          properties:
+            id: {type: string, format: uuid, readOnly: true}
+            slug: {type: string}
+            name: {type: string}
+            status: {type: string, enum: [active, suspended, archived]}
+            settings: {type: object, additionalProperties: true}
+    OrganizationUpdate:
+      type: object
+      properties:
+        name: {type: string}
+        settings:
+          type: object
+          additionalProperties: true
+          description: >-
+            Cấu hình tự do của organization. Khoá `model_routing` (xem ModelRoutingSettings) là ánh xạ
+            tier → chuỗi model của Model Router và được kiểm khi ghi (422 nếu sai định dạng hoặc model
+            không tồn tại trong tầm nhìn của tenant). Project có cùng khoá và ghi đè organization theo từng tier.
+
+    ModelRoutingSettings:
+      type: object
+      description: >-
+        Giá trị của khoá `model_routing` trong settings của organization hoặc project (ADR-0010).
+        Mỗi tier có một chuỗi model theo thứ tự: model chính, rồi tối đa ba model dự phòng được
+        dùng khi model đứng trước lỗi tạm thời. Agent Version với `model.policy: tiered` chạy bằng
+        chuỗi của `default_tier` (mặc định `standard`); chuỗi được chốt lúc tạo execution.
+      additionalProperties: false
+      properties:
+        tiers:
+          type: object
+          additionalProperties: false
+          properties:
+            economy: {$ref: '#/components/schemas/ModelRoutingTier'}
+            standard: {$ref: '#/components/schemas/ModelRoutingTier'}
+            premium: {$ref: '#/components/schemas/ModelRoutingTier'}
+    ModelRoutingTier:
+      type: object
+      additionalProperties: false
+      required: [models]
+      properties:
+        models:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items: {type: string, format: uuid}
+
+    Project:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, slug, name, environment]
+          properties:
+            id: {type: string, format: uuid, readOnly: true}
+            slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$'}
+            name: {type: string}
+            environment: {$ref: '#/components/schemas/Environment'}
+            settings: {type: object, additionalProperties: true}
+            archived_at: {type: [string, 'null'], format: date-time}
+    ProjectCreate:
+      type: object
+      required: [slug, name, environment]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$'}
+        name: {type: string}
+        environment: {$ref: '#/components/schemas/Environment'}
+        settings: {type: object, additionalProperties: true}
+    ProjectUpdate:
+      type: object
+      description: '`environment` không đổi được sau khi tạo'
+      properties:
+        name: {type: string}
+        settings: {type: object, additionalProperties: true}
+
+    AgentConfig:
+      type: object
+      description: Cấu hình bất biến của một Agent Version. Xem docs/architecture/agent-runtime.md §3
+      required: [model, limits, tools]
+      properties:
+        role: {type: string}
+        model:
+          type: object
+          required: [policy]
+          properties:
+            policy:
+              type: string
+              enum: [fixed, tiered]
+              description: >-
+                `fixed`: luôn dùng `fixed_model_id`. `tiered`: Model Router chọn chuỗi model của
+                `default_tier` theo cấu hình `model_routing` của project / organization lúc tạo execution.
+            fixed_model_id: {type: [string, 'null'], format: uuid}
+            default_tier: {$ref: '#/components/schemas/ModelTier'}
+            temperature: {type: number, minimum: 0, maximum: 2}
+            max_output_tokens: {type: integer, minimum: 1}
+        limits:
+          type: object
+          required: [max_iterations, max_tool_calls, timeout_seconds]
+          properties:
+            max_iterations: {type: integer, minimum: 1}
+            max_tool_calls: {type: integer, minimum: 0}
+            timeout_seconds: {type: integer, minimum: 1}
+            budget: {$ref: '#/components/schemas/Money'}
+        tools:
+          type: array
+          items:
+            type: object
+            required: [server_id, allow]
+            properties:
+              server_id: {type: string, format: uuid}
+              allow: {type: array, items: {type: string}, description: 'Tên tool; `*` cho tất cả'}
+              deny: {type: array, items: {type: string}}
+              require_approval: {type: string, enum: [policy, always], default: policy}
+        delegation:
+          type: object
+          properties:
+            can_delegate_to:
+              type: array
+              maxItems: 8
+              items: {type: string, format: uuid}
+              description: |
+                Agent (cùng project) mà Agent này được giao việc cho, bằng tool nội bộ
+                `delegate_task`. Agent đích chạy version đang hoạt động của nó lúc execution được
+                tạo. Mỗi lần giao việc còn được quyết định lại lúc chạy: Agent đích không phải tổ
+                tiên trong chuỗi giao việc, độ sâu, tổng số task của execution (16), và budget
+                (lấy từ phần còn lại của task giao việc).
+            max_depth:
+              type: integer
+              minimum: 0
+              maximum: 5
+              default: 0
+              description: |
+                Độ sâu tối đa của chuỗi giao việc bắt đầu từ execution (task gốc ở độ sâu 0).
+                Phải từ 1 trở lên khi có `can_delegate_to`. Giới hạn nhỏ nhất trong chuỗi được áp.
+        memory:
+          type: object
+          properties:
+            session_history: {type: string, enum: [none, full, summarized], default: summarized}
+        runtime:
+          type: object
+          properties:
+            isolation: {type: string, enum: [shared, isolated], default: shared}
+    Agent:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, project_id, slug, name, status]
+          properties:
+            id: {type: string, format: uuid, readOnly: true}
+            project_id: {type: string, format: uuid, readOnly: true}
+            slug: {type: string}
+            name: {type: string}
+            description: {type: string}
+            status: {$ref: '#/components/schemas/AgentStatus'}
+            active_version: {type: [integer, 'null']}
+            latest_version: {type: integer}
+    AgentCreate:
+      type: object
+      required: [slug, name, system_prompt, config]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$'}
+        name: {type: string}
+        description: {type: string}
+        system_prompt: {type: string}
+        config: {$ref: '#/components/schemas/AgentConfig'}
+    AgentUpdate:
+      type: object
+      properties:
+        name: {type: string}
+        description: {type: string}
+        status: {type: string, enum: [active, disabled]}
+    AgentVersion:
+      type: object
+      required: [id, agent_id, version, system_prompt, config, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        agent_id: {type: string, format: uuid}
+        version: {type: integer}
+        system_prompt: {type: string}
+        config: {$ref: '#/components/schemas/AgentConfig'}
+        change_note: {type: string}
+        created_by: {type: [string, 'null'], format: uuid}
+        created_at: {type: string, format: date-time}
+    AgentVersionCreate:
+      type: object
+      required: [system_prompt, config]
+      properties:
+        system_prompt: {type: string}
+        config: {$ref: '#/components/schemas/AgentConfig'}
+        change_note: {type: string}
+        activate: {type: boolean, default: false}
+
+    ApiKey:
+      type: object
+      required: [id, name, prefix, role, expires_at, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        prefix: {type: string, description: Phần đầu của khoá để nhận diện; không phải bí mật}
+        role: {type: string, description: Role dựng sẵn được gắn cho khoá}
+        project_id: {type: [string, 'null'], format: uuid, description: Phạm vi project; null là toàn organization}
+        created_by: {type: string, format: uuid}
+        expires_at: {type: string, format: date-time}
+        revoked_at: {type: [string, 'null'], format: date-time}
+        last_used_at: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+    ApiKeyCreate:
+      type: object
+      required: [name, role]
+      properties:
+        name: {type: string, maxLength: 100}
+        role: {type: string, description: 'Tên role dựng sẵn: viewer, developer, operator...'}
+        project_id: {type: string, format: uuid, description: Bỏ trống để tạo khoá phạm vi organization}
+        expires_in_days: {type: integer, minimum: 1, maximum: 365, default: 90}
+    ApiKeyCreated:
+      allOf:
+        - {$ref: '#/components/schemas/ApiKey'}
+        - type: object
+          required: [key]
+          properties:
+            key: {type: string, readOnly: true, description: Giá trị của khoá. Chỉ xuất hiện một lần}
+    NotificationWebhook:
+      type: object
+      required: [url, enabled, consecutive_failures, created_at, updated_at]
+      properties:
+        url: {type: string, format: uri}
+        enabled: {type: boolean}
+        consecutive_failures: {type: integer}
+        disabled_reason: {type: string, enum: [delivery_failures]}
+        created_by: {type: string, format: uuid}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    NotificationWebhookPut:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url: {type: string, format: uri, maxLength: 2048}
+    NotificationWebhookCreated:
+      allOf:
+        - {$ref: '#/components/schemas/NotificationWebhook'}
+        - type: object
+          required: [signing_secret]
+          properties:
+            signing_secret: {type: string, readOnly: true, description: Khoá ký HMAC. Chỉ xuất hiện một lần}
+    NotificationDelivery:
+      type: object
+      required: [id, event_type, approval_id, status, attempts, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        event_type: {type: string, enum: [approval.requested]}
+        approval_id: {type: string, format: uuid}
+        status: {type: string, enum: [pending, delivered, failed, dropped]}
+        attempts: {type: integer}
+        next_attempt_at: {type: string, format: date-time}
+        last_http_status: {type: integer}
+        last_error_code:
+          type: string
+          enum: [blocked, timeout, connect, http_status, secret_unavailable, not_configured, approval_closed, attempts_exhausted]
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    ExecutionCreate:
+      type: object
+      required: [mode, input]
+      properties:
+        mode:
+          type: string
+          enum: [direct_tool, single_agent, planned]
+          description: |
+            `direct_tool`: gọi một tool, không LLM; cần `tool`.
+            `single_agent`: cần `agent_id`.
+            `planned`: Orchestrator chạy một kế hoạch nhiều task; project phải bật chế độ này
+            (`settings.orchestration.planned_enabled`). Phase này kế hoạch do người gọi đưa
+            trong `plan` (bắt buộc); việc lập kế hoạch bằng LLM chưa có.
+        agent_id: {type: string, format: uuid}
+        agent_version: {type: integer, description: Mặc định là version đang hoạt động}
+        tool:
+          type: object
+          required: [tool_id, arguments]
+          properties:
+            tool_id: {type: string, format: uuid}
+            arguments: {type: object, additionalProperties: true}
+        plan: {$ref: '#/components/schemas/ExecutionPlan'}
+        session_id: {type: string, format: uuid}
+        input:
+          type: object
+          required: [message]
+          properties:
+            message: {type: string}
+            context: {type: object, additionalProperties: true}
+        budget:
+          allOf: [{$ref: '#/components/schemas/Money'}]
+          description: |
+            Trần chi phí của execution (USD). Chỉ dùng với `planned`: tổng budget của các task
+            không được vượt trần này. (Mọi task của `planned` luôn phải có budget, của kế hoạch
+            hoặc của Agent Version.)
+        timeout_seconds: {type: integer, minimum: 1}
+        callback_url: {type: string, format: uri, description: Webhook ký HMAC khi execution kết thúc. Được kiểm tra chống SSRF}
+    OrchestrationSettings:
+      type: object
+      additionalProperties: false
+      description: |
+        Giá trị của khoá `orchestration` trong settings của một **project** (agent-runtime §5.1).
+        Khoá lạ hoặc giá trị ngoài khoảng bị từ chối (422) khi ghi; cấu hình đã lưu bị hỏng làm
+        việc tạo execution `planned` dừng với `orchestration_config_invalid`. Khoá này không có
+        tác dụng ở settings của organization.
+      properties:
+        planned_enabled: {type: boolean, default: false, description: Cho phép execution `mode planned` trong project}
+        planner_agent_id:
+          type: string
+          format: uuid
+          description: Agent lập kế hoạch của project, dùng bởi `POST /projects/{id}/plan-proposals`. Prompt và model của nó do Agent Version quyết định
+        max_parallel_tasks: {type: integer, minimum: 1, maximum: 8, default: 4, description: Số task của một execution chạy đồng thời}
+    PlanProposalCreate:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: object
+          required: [message]
+          properties:
+            message: {type: string, maxLength: 20000, description: Yêu cầu cần phân rã thành kế hoạch}
+        agent_ids:
+          type: array
+          maxItems: 32
+          items: {type: string, format: uuid}
+          description: Các Agent mà kế hoạch được dùng; đề xuất nêu Agent khác là không hợp lệ. Mặc định là mọi Agent đang hoạt động của project (tối đa 32), trừ Agent lập kế hoạch
+    PlanProposalRun:
+      type: object
+      properties:
+        budget:
+          allOf: [{$ref: '#/components/schemas/Money'}]
+          description: Trần chi phí của execution (USD); tổng budget của các task không được vượt
+        timeout_seconds: {type: integer, minimum: 1}
+        max_parallel_tasks: {type: integer, minimum: 1, maximum: 8}
+    PlanProposal:
+      type: object
+      required: [status, problems]
+      properties:
+        status:
+          type: string
+          enum: [pending, ready, invalid]
+          description: |
+            `pending`: execution lập kế hoạch chưa kết thúc. `ready`: đề xuất hợp lệ về cấu trúc.
+            `invalid`: execution không hoàn thành, hoặc trả lời không phải một kế hoạch hợp lệ.
+        plan: {$ref: '#/components/schemas/ExecutionPlan'}
+        problems: {type: array, items: {type: string}, description: Lý do đề xuất không hợp lệ}
+    ExecutionPlan:
+      type: object
+      description: |
+        Kế hoạch của một execution `planned`: một đồ thị không chu trình các task, mỗi task giao
+        cho một Agent. Kế hoạch là dữ liệu và được kiểm trước khi chạy (Agent thuộc project và
+        đang hoạt động, phụ thuộc tồn tại, không chu trình, tối đa 16 task, chuỗi phụ thuộc dài
+        tối đa 8, budget phân bổ không vượt budget của execution). Kế hoạch không hợp lệ bị từ
+        chối với 422, không được sửa giúp. Task không phụ thuộc nhau chạy song song.
+      required: [tasks]
+      properties:
+        max_parallel_tasks:
+          type: integer
+          minimum: 1
+          maximum: 8
+          description: Số task chạy đồng thời; chỉ đặt được thấp hơn hoặc bằng cấu hình của project (mặc định 4)
+        tasks:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: {$ref: '#/components/schemas/ExecutionPlanTask'}
+    ExecutionPlanTask:
+      type: object
+      required: [id, agent_id, goal]
+      properties:
+        id: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,31}$', description: Định danh của task trong kế hoạch}
+        agent_id: {type: string, format: uuid}
+        agent_version: {type: integer, description: Mặc định là version đang hoạt động}
+        goal: {type: string, description: Việc giao cho Agent. Task chỉ nhận goal và tóm tắt kết quả của các task nó phụ thuộc}
+        depends_on: {type: array, items: {type: string}, description: '`id` của các task phải kết thúc trước'}
+        on_failure:
+          type: string
+          enum: [fail_execution, continue, skip_dependents]
+          default: skip_dependents
+          description: |
+            Khi task không hoàn thành. `fail_execution`: dừng cả execution. `skip_dependents`: bỏ
+            qua các task phụ thuộc nó, phần còn lại chạy tiếp. `continue`: các task phụ thuộc vẫn
+            chạy và execution không bị coi là thất bại vì task này.
+        budget:
+          allOf: [{$ref: '#/components/schemas/Money'}]
+          description: Phần budget cấp cho task (USD); chỉ được chặt hơn `limits.budget` của Agent Version
+    Execution:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, project_id, mode, status, estimated_cost]
+          properties:
+            id: {type: string, format: uuid}
+            project_id: {type: string, format: uuid}
+            session_id: {type: [string, 'null'], format: uuid}
+            workflow_execution_id: {type: [string, 'null'], format: uuid}
+            mode: {type: string, enum: [direct_tool, single_agent, planned]}
+            status: {$ref: '#/components/schemas/ExecutionStatus'}
+            initiator:
+              type: object
+              properties:
+                type: {type: string, enum: [user, api_key, schedule, workflow]}
+                id: {type: [string, 'null'], format: uuid}
+            input: {type: object, additionalProperties: true}
+            output: {type: [object, 'null'], additionalProperties: true}
+            error: {oneOf: [{$ref: '#/components/schemas/Problem'}, {type: 'null'}]}
+            budget: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+            estimated_cost: {$ref: '#/components/schemas/Money'}
+            pending_approval_ids: {type: array, items: {type: string, format: uuid}}
+            pause_requested_at:
+              type: [string, 'null']
+              format: date-time
+              description: Khác null khi execution đang có yêu cầu tạm dừng, kể cả khi `status` chưa là `paused` (ví dụ đang `waiting_approval`, hoặc bước hiện tại chưa xong)
+            trace_id: {type: string}
+            started_at: {type: [string, 'null'], format: date-time}
+            finished_at: {type: [string, 'null'], format: date-time}
+    Task:
+      type: object
+      required: [id, execution_id, agent_id, agent_version, goal, status, depth]
+      properties:
+        id: {type: string, format: uuid}
+        execution_id: {type: string, format: uuid}
+        parent_task_id: {type: [string, 'null'], format: uuid}
+        agent_id: {type: string, format: uuid}
+        agent_version: {type: integer}
+        plan_key: {type: [string, 'null'], description: '`id` của task trong kế hoạch (execution `planned`)'}
+        depends_on: {type: array, items: {type: string, format: uuid}}
+        on_failure: {type: string, enum: [fail_execution, continue, skip_dependents]}
+        budget: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+        depth: {type: integer}
+        goal: {type: string}
+        status: {$ref: '#/components/schemas/TaskStatus'}
+        output_summary: {type: [string, 'null']}
+        output: {type: [object, 'null'], additionalProperties: true}
+        error: {oneOf: [{$ref: '#/components/schemas/Problem'}, {type: 'null'}]}
+        estimated_cost: {$ref: '#/components/schemas/Money'}
+        iterations: {type: integer}
+        tool_calls: {type: integer}
+        started_at: {type: [string, 'null'], format: date-time}
+        finished_at: {type: [string, 'null'], format: date-time}
+    Step:
+      type: object
+      required: [id, task_id, step_seq, kind, status, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        task_id: {type: string, format: uuid}
+        step_seq: {type: integer}
+        kind: {$ref: '#/components/schemas/StepKind'}
+        status: {type: string, enum: [started, succeeded, failed, denied, unknown]}
+        model_id: {type: [string, 'null'], format: uuid}
+        routing: {type: [object, 'null'], additionalProperties: true}
+        tool_id: {type: [string, 'null'], format: uuid}
+        tool_name: {type: [string, 'null']}
+        approval_id: {type: [string, 'null'], format: uuid}
+        duration_ms: {type: [integer, 'null']}
+        request: {type: [object, 'null'], additionalProperties: true, description: Chỉ có khi `include_content=true` và còn trong thời hạn lưu giữ}
+        response: {type: [object, 'null'], additionalProperties: true}
+        error: {type: [object, 'null'], additionalProperties: true}
+        created_at: {type: string, format: date-time}
+
+    McpServer:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, slug, name, kind, transport, status, health_status]
+          properties:
+            id: {type: string, format: uuid}
+            slug: {type: string}
+            name: {type: string}
+            description: {type: string}
+            scope: {type: string, enum: [platform, organization], readOnly: true}
+            kind: {type: string, enum: [managed, external]}
+            transport: {type: string, enum: [streamable_http, stdio]}
+            endpoint: {type: [string, 'null'], format: uri}
+            auth_method: {type: string, enum: [none, service_token, org_secret, user_oauth]}
+            status: {$ref: '#/components/schemas/McpServerStatus'}
+            health_status: {$ref: '#/components/schemas/HealthStatus'}
+            health_checked_at: {type: [string, 'null'], format: date-time}
+            active_version: {type: [integer, 'null']}
+            pending_review_version: {type: [integer, 'null']}
+    McpServerCreate:
+      type: object
+      required: [slug, name, transport, auth_method]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$'}
+        name: {type: string}
+        description: {type: string}
+        transport: {type: string, enum: [streamable_http, stdio]}
+        endpoint: {type: string, format: uri, description: Bắt buộc với `streamable_http`; chỉ https}
+        auth_method: {type: string, enum: [none, service_token, org_secret, user_oauth]}
+        credential:
+          type: object
+          writeOnly: true
+          description: Giá trị bí mật, lưu mã hoá, không bao giờ trả lại
+          additionalProperties: true
+    McpServerUpdate:
+      type: object
+      properties:
+        name: {type: string}
+        description: {type: string}
+        endpoint: {type: string, format: uri}
+        status: {type: string, enum: [active, disabled]}
+        credential: {type: object, writeOnly: true, additionalProperties: true}
+    McpServerVersion:
+      type: object
+      required: [id, server_id, version, protocol_version, review_status, discovered_at]
+      properties:
+        id: {type: string, format: uuid}
+        server_id: {type: string, format: uuid}
+        version: {type: integer}
+        reported_version: {type: [string, 'null']}
+        protocol_version: {type: string, examples: ['2026-07-28']}
+        review_status: {$ref: '#/components/schemas/ReviewStatus'}
+        changes:
+          type: object
+          description: So với version đang hoạt động
+          properties:
+            added_tools: {type: array, items: {type: string}}
+            removed_tools: {type: array, items: {type: string}}
+            changed_tools: {type: array, items: {type: string}}
+        tool_count: {type: integer}
+        resource_count: {type: integer}
+        prompt_count: {type: integer}
+        reviewed_by: {type: [string, 'null'], format: uuid}
+        reviewed_at: {type: [string, 'null'], format: date-time}
+        discovered_at: {type: string, format: date-time}
+    McpTool:
+      type: object
+      required: [id, server_id, name, input_schema, enabled, risk_level, side_effect]
+      properties:
+        id: {type: string, format: uuid}
+        server_id: {type: string, format: uuid}
+        name: {type: string}
+        description: {type: string}
+        input_schema: {type: object, additionalProperties: true}
+        enabled: {type: boolean}
+        risk_level: {$ref: '#/components/schemas/RiskLevel'}
+        side_effect: {type: string, enum: [none, idempotent, non_idempotent]}
+        data_sensitivity: {type: string, enum: [public, internal, sensitive]}
+        egress: {type: boolean}
+        cacheable: {type: boolean}
+        timeout_ms: {type: integer}
+        max_result_bytes: {type: integer}
+        unit_cost: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+    McpToolPolicyUpdate:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        risk_level: {$ref: '#/components/schemas/RiskLevel'}
+        side_effect: {type: string, enum: [none, idempotent, non_idempotent]}
+        data_sensitivity: {type: string, enum: [public, internal, sensitive]}
+        egress: {type: boolean}
+        cacheable: {type: boolean}
+        timeout_ms: {type: integer, minimum: 100}
+        max_result_bytes: {type: integer, minimum: 1024}
+        unit_cost: {$ref: '#/components/schemas/Money'}
+
+    Workflow:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, project_id, slug, name, version, definition, status]
+          properties:
+            id: {type: string, format: uuid}
+            project_id: {type: string, format: uuid}
+            slug: {type: string}
+            name: {type: string}
+            description: {type: string}
+            version: {type: integer, readOnly: true}
+            definition: {$ref: '#/components/schemas/WorkflowDefinition'}
+            schedule: {type: [string, 'null'], description: Biểu thức cron, múi giờ UTC}
+            status: {$ref: '#/components/schemas/WorkflowStatus'}
+    WorkflowDefinition:
+      type: object
+      description: |
+        Định nghĩa của một workflow (ADR-0015): một đồ thị không chu trình các bước. Mỗi lần chạy
+        được biên dịch thành một execution `planned`, nên các trần của `planned` áp dụng: tối đa
+        16 bước, chuỗi phụ thuộc dài tối đa 8, mỗi bước `agent` phải có budget (của bước hoặc của
+        Agent Version). Không có biến hay template: một bước `agent` chỉ nhận `goal` của nó và
+        tóm tắt kết quả của các bước `agent` nó phụ thuộc trực tiếp. Định nghĩa được kiểm khi
+        ghi và kiểm lại (Agent còn hoạt động, model, giá, budget) ở mỗi lần chạy. Bước `tool`
+        chưa hỗ trợ.
+
+        Bước `approval` là một cổng chờ người: lần chạy dừng ở bước đó (`waiting_approval`) tới
+        khi đủ `required_approvals` người duyệt (bước hoàn thành), có người từ chối hoặc hết
+        `timeout_seconds` (bước thất bại; các bước sau theo `on_failure`). Approval của bước
+        hiện ở `/v1/approvals` với `subject_type: workflow_step`. Người yêu cầu là người chạy
+        lần đó (với lần chạy theo lịch: người chạy của workflow) và không tự duyệt được; người
+        đã viết `definition` của lần chạy (hoặc người tạo API key đã viết nó) cũng không.
+        Approval không sống quá hạn của execution. Bước `approval` không nhận
+        `on_failure: continue`, và một bước đứng sau cổng chưa được duyệt (kể cả gián tiếp)
+        không chạy.
+      required: [steps]
+      properties:
+        max_parallel_steps: {type: integer, minimum: 1, maximum: 8, description: Số bước chạy đồng thời; không vượt cấu hình của project}
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            type: object
+            required: [id, type]
+            properties:
+              id: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'}
+              type: {type: string, enum: [agent, wait, approval]}
+              depends_on: {type: array, items: {type: string}}
+              agent_id: {type: string, format: uuid, description: Với `agent`}
+              goal: {type: string, description: Với `agent`. Việc giao cho Agent}
+              budget: {allOf: [{$ref: '#/components/schemas/Money'}], description: Với `agent`. Chỉ được chặt hơn `limits.budget` của Agent Version}
+              on_failure: {type: string, enum: [fail_execution, continue, skip_dependents], default: skip_dependents}
+              seconds: {type: integer, minimum: 1, maximum: 3600, description: Với `wait`. Thời gian chờ}
+              message: {type: string, maxLength: 2000, description: Với `approval`. Điều người duyệt được hỏi (văn bản tĩnh)}
+              required_approvals: {type: integer, minimum: 1, maximum: 2, default: 1, description: Với `approval`. Số người duyệt (khác nhau) cần có}
+              timeout_seconds:
+                type: integer
+                minimum: 10
+                maximum: 86400
+                description: >-
+                  Với `approval`: thời hạn duyệt (60–86400 giây, mặc định 1800); hết hạn là từ chối.
+                  Với `agent`: thời hạn riêng của bước (từ 10 giây), chỉ được chặt hơn thời hạn của
+                  Agent Version; quá hạn thì bước kết thúc `timed_out` và các bước sau theo `on_failure`.
+              max_attempts:
+                type: integer
+                minimum: 1
+                maximum: 3
+                default: 1
+                description: >-
+                  Với `agent`: số lần chạy bước. Bước được chạy lại khi nó kết thúc `failed` hoặc
+                  `timed_out` (không chạy lại khi hết budget hay bị huỷ). Mỗi lần thử là một task
+                  riêng của execution (`<id>`, `<id>-try2`, `<id>-try3`), tính vào trần 16 bước, có
+                  budget riêng bằng budget của bước (chi phí xấu nhất của bước là `max_attempts` × budget
+                  của nó) và thời hạn riêng, và tính vào độ dài chuỗi phụ thuộc (tối đa 8). Bước
+                  CHỈ được chạy lại khi các lần thử trước chắc chắn chưa gây tác động: không gọi
+                  tool nào ngoài tool chỉ đọc (kể cả lời gọi có kết quả không xác định) và không giao
+                  việc cho Agent khác; ngược lại lần thử lại kết thúc `failed` mà không chạy. Lần thử lại thấy tóm tắt kết quả của lần
+                  thử trước. `on_failure` áp cho kết quả của lần thử cuối cùng đã chạy; bước sau
+                  nhận kết quả của lần thử thành công.
+    WorkflowCreate:
+      type: object
+      required: [slug, name, definition]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$'}
+        name: {type: string}
+        description: {type: string}
+        definition: {$ref: '#/components/schemas/WorkflowDefinition'}
+        schedule: {type: string}
+    WorkflowUpdate:
+      type: object
+      properties:
+        name: {type: string}
+        description: {type: string}
+        definition: {$ref: '#/components/schemas/WorkflowDefinition'}
+        schedule: {type: [string, 'null']}
+        status: {type: string, enum: [active, disabled]}
+    WorkflowExecution:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, workflow_id, workflow_version, status, trigger_type]
+          properties:
+            id: {type: string, format: uuid}
+            workflow_id: {type: string, format: uuid}
+            workflow_version: {type: integer}
+            trigger_type: {type: string, enum: [manual, schedule, api]}
+            status: {$ref: '#/components/schemas/WorkflowExecutionStatus'}
+            input: {type: [object, 'null'], additionalProperties: true}
+            output: {type: [object, 'null'], additionalProperties: true}
+            error: {oneOf: [{$ref: '#/components/schemas/Problem'}, {type: 'null'}]}
+            execution_id: {type: [string, 'null'], format: uuid, description: Execution `planned` chạy lần này}
+            started_at: {type: [string, 'null'], format: date-time}
+            finished_at: {type: [string, 'null'], format: date-time}
+
+    Approval:
+      type: object
+      required: [id, project_id, subject_type, risk_level, status, required_approvals, expires_at, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        project_id: {type: string, format: uuid}
+        execution_id: {type: [string, 'null'], format: uuid}
+        task_id: {type: [string, 'null'], format: uuid}
+        parent_approval_id: {type: [string, 'null'], format: uuid}
+        subject_type: {type: string, enum: [tool_call, remediation_plan, workflow_step]}
+        risk_level: {$ref: '#/components/schemas/RiskLevel'}
+        payload:
+          type: object
+          description: Những gì người duyệt cần thấy
+          properties:
+            message: {type: string, description: Với `workflow_step`. Điều người duyệt được hỏi (văn bản tĩnh của định nghĩa workflow)}
+            plan_key: {type: string, description: Với `workflow_step`. `id` của bước trong định nghĩa workflow}
+            tool_name: {type: string}
+            server_name: {type: string}
+            arguments: {type: object, additionalProperties: true}
+            dry_run_result: {type: [object, 'null'], additionalProperties: true}
+            agent_rationale: {type: string, description: Do model sinh ra; không phải sự thật đã kiểm chứng}
+            redactions:
+              type: integer
+              description: >-
+                Số chỗ trong `arguments` đã bị che vì khớp mẫu secret. Khác 0 nghĩa là người duyệt
+                không thấy toàn bộ hành động sẽ được thực thi. `arguments` do model sinh ra: coi nó là
+                dữ liệu không tin cậy khi hiển thị.
+            actions: {type: array, items: {type: object, additionalProperties: true}, description: Với `remediation_plan`}
+        status: {$ref: '#/components/schemas/ApprovalStatus'}
+        required_approvals: {type: integer}
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [user_id, decision, decided_at]
+            properties:
+              user_id: {type: string, format: uuid}
+              decision: {type: string, enum: [approve, reject]}
+              comment: {type: string}
+              decided_at: {type: string, format: date-time}
+        requested_by: {type: [string, 'null'], format: uuid}
+        expires_at: {type: string, format: date-time}
+        resolved_at: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+
+    ModelProvider:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, slug, adapter, enabled]
+          properties:
+            id: {type: string, format: uuid}
+            slug: {type: string}
+            adapter: {type: string, description: Tên adapter đã cài trong platform, examples: [openai, openai_compatible]}
+            base_url: {type: [string, 'null'], format: uri}
+            scope: {type: string, enum: [platform, organization], readOnly: true}
+            enabled: {type: boolean}
+            has_credential: {type: boolean, readOnly: true}
+            settings: {type: object, additionalProperties: true}
+    ModelProviderCreate:
+      type: object
+      required: [slug, adapter]
+      properties:
+        slug: {type: string}
+        adapter: {type: string}
+        base_url: {type: string, format: uri}
+        api_key: {type: string, writeOnly: true}
+        settings: {type: object, additionalProperties: true}
+    ModelProviderUpdate:
+      type: object
+      properties:
+        base_url: {type: string, format: uri}
+        api_key: {type: string, writeOnly: true, description: Gửi để xoay vòng khoá}
+        enabled: {type: boolean}
+        settings: {type: object, additionalProperties: true}
+    Model:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, provider_id, provider_model, display_name, enabled]
+          properties:
+            id: {type: string, format: uuid}
+            provider_id: {type: string, format: uuid}
+            provider_model: {type: string, description: Định danh model phía provider}
+            display_name: {type: string}
+            tier: {oneOf: [{$ref: '#/components/schemas/ModelTier'}, {type: 'null'}]}
+            capabilities:
+              type: object
+              properties:
+                tool_calling: {type: boolean}
+                structured_output: {type: boolean}
+                context_window: {type: integer}
+                max_output_tokens: {type: integer}
+              additionalProperties: true
+            enabled: {type: boolean}
+            deprecated_at: {type: [string, 'null'], format: date-time}
+            has_current_pricing: {type: boolean, readOnly: true}
+    ModelCreate:
+      type: object
+      required: [provider_id, provider_model, display_name]
+      properties:
+        provider_id: {type: string, format: uuid}
+        provider_model: {type: string}
+        display_name: {type: string}
+        tier: {$ref: '#/components/schemas/ModelTier'}
+        capabilities: {type: object, additionalProperties: true}
+    ModelUpdate:
+      type: object
+      properties:
+        display_name: {type: string}
+        tier: {oneOf: [{$ref: '#/components/schemas/ModelTier'}, {type: 'null'}]}
+        capabilities: {type: object, additionalProperties: true}
+        enabled: {type: boolean}
+        deprecated_at: {type: [string, 'null'], format: date-time}
+    ModelPricing:
+      type: object
+      required: [id, model_id, version, currency, input_per_mtok, output_per_mtok, effective_from]
+      properties:
+        id: {type: string, format: uuid}
+        model_id: {type: string, format: uuid}
+        scope: {type: string, enum: [list, organization], description: Giá niêm yết hoặc giá riêng của org}
+        version: {type: integer}
+        currency: {type: string}
+        input_per_mtok: {type: string}
+        output_per_mtok: {type: string}
+        cached_input_per_mtok: {type: [string, 'null']}
+        cache_write_per_mtok: {type: [string, 'null']}
+        reasoning_per_mtok: {type: [string, 'null']}
+        effective_from: {type: string, format: date-time}
+        effective_to: {type: [string, 'null'], format: date-time}
+        source: {type: [string, 'null']}
+    ModelPricingCreate:
+      type: object
+      required: [currency, input_per_mtok, output_per_mtok, effective_from]
+      properties:
+        currency: {type: string}
+        input_per_mtok: {type: string}
+        output_per_mtok: {type: string}
+        cached_input_per_mtok: {type: string}
+        cache_write_per_mtok: {type: string}
+        reasoning_per_mtok: {type: string}
+        effective_from: {type: string, format: date-time}
+        source: {type: string}
+
+    Budget:
+      allOf:
+        - {$ref: '#/components/schemas/Timestamps'}
+        - type: object
+          required: [id, scope_type, scope_id, period, limit, hard_action, enabled]
+          properties:
+            id: {type: string, format: uuid}
+            scope_type: {$ref: '#/components/schemas/BudgetScope'}
+            scope_id: {type: string, format: uuid}
+            period: {type: string, enum: [daily, monthly, total]}
+            limit: {$ref: '#/components/schemas/Money'}
+            soft_threshold_pct: {type: [integer, 'null'], minimum: 1, maximum: 100}
+            hard_action: {type: string, enum: [block, alert_only]}
+            enabled: {type: boolean}
+            current_period:
+              type: object
+              readOnly: true
+              properties:
+                start: {type: string, format: date-time}
+                end: {type: [string, 'null'], format: date-time}
+                spent: {$ref: '#/components/schemas/Money'}
+                reserved: {$ref: '#/components/schemas/Money'}
+                utilization_pct: {type: number}
+    BudgetCreate:
+      type: object
+      required: [scope_type, scope_id, period, limit]
+      properties:
+        scope_type: {$ref: '#/components/schemas/BudgetScope'}
+        scope_id: {type: string, format: uuid}
+        period: {type: string, enum: [daily, monthly, total]}
+        limit: {$ref: '#/components/schemas/Money'}
+        soft_threshold_pct: {type: integer, minimum: 1, maximum: 100}
+        hard_action: {type: string, enum: [block, alert_only], default: block}
+    BudgetUpdate:
+      type: object
+      properties:
+        limit: {$ref: '#/components/schemas/Money'}
+        soft_threshold_pct: {type: [integer, 'null'], minimum: 1, maximum: 100}
+        hard_action: {type: string, enum: [block, alert_only]}
+        enabled: {type: boolean}
+
+    UsageTotals:
+      type: object
+      required: [calls, input_tokens, output_tokens, estimated_cost]
+      properties:
+        calls: {type: integer}
+        executions: {type: integer}
+        input_tokens: {type: integer}
+        output_tokens: {type: integer}
+        cached_input_tokens: {type: integer}
+        unpriced_calls: {type: integer, description: Số lượt gọi chưa có giá (không góp vào `estimated_cost`)}
+        estimated_cost: {$ref: '#/components/schemas/Money'}
+        avg_cost_per_execution: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+    UsageSummary:
+      type: object
+      required: [from, to, cost_basis, totals, groups]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        cost_basis: {type: string, enum: [estimated], description: Số liệu ở đây luôn là ước tính; chi phí thực xem /costs/reconciliation}
+        totals: {$ref: '#/components/schemas/UsageTotals'}
+        truncated: {type: boolean, description: Còn nhóm không được trả về (trần 500 nhóm)}
+        groups:
+          type: array
+          items:
+            allOf:
+              - {$ref: '#/components/schemas/UsageTotals'}
+              - type: object
+                required: [key]
+                properties:
+                  key:
+                    type: object
+                    description: Giá trị của từng chiều trong `group_by`
+                    additionalProperties: {type: [string, 'null']}
+    UsageTimeseries:
+      type: object
+      required: [interval, cost_basis, series]
+      properties:
+        interval: {type: string, enum: [day, month]}
+        cost_basis: {type: string, enum: [estimated]}
+        series:
+          type: array
+          items:
+            type: object
+            required: [points]
+            properties:
+              key: {type: [string, 'null'], description: Giá trị của chiều `group_by`}
+              points:
+                type: array
+                items:
+                  type: object
+                  required: [period_start, estimated_cost]
+                  properties:
+                    period_start: {type: string, format: date-time}
+                    input_tokens: {type: integer}
+                    output_tokens: {type: integer}
+                    estimated_cost: {$ref: '#/components/schemas/Money'}
+        forecast:
+          type: [object, 'null']
+          properties:
+            method: {type: string, examples: [linear_run_rate]}
+            period_end: {type: string, format: date-time}
+            projected_cost: {$ref: '#/components/schemas/Money'}
+            low: {$ref: '#/components/schemas/Money'}
+            high: {$ref: '#/components/schemas/Money'}
+    UsageRecord:
+      type: object
+      required: [id, kind, occurred_at]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string, enum: [llm, tool, adjustment]}
+        purpose: {type: [string, 'null']}
+        project_id: {type: string, format: uuid}
+        user_id: {type: [string, 'null'], format: uuid}
+        agent_id: {type: [string, 'null'], format: uuid}
+        execution_id: {type: [string, 'null'], format: uuid}
+        task_id: {type: [string, 'null'], format: uuid}
+        workflow_id: {type: [string, 'null'], format: uuid}
+        provider_id: {type: [string, 'null'], format: uuid}
+        model_id: {type: [string, 'null'], format: uuid}
+        tool_id: {type: [string, 'null'], format: uuid}
+        input_tokens: {type: integer}
+        output_tokens: {type: integer}
+        cached_input_tokens: {type: integer}
+        cache_write_tokens: {type: integer}
+        reasoning_tokens: {type: integer}
+        pricing_id: {type: [string, 'null'], format: uuid}
+        estimated_cost: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+        occurred_at: {type: string, format: date-time}
+    CostRecord:
+      type: object
+      required: [id, provider_id, usage_date, billed_cost, source]
+      properties:
+        id: {type: string, format: uuid}
+        provider_id: {type: string, format: uuid}
+        model_id: {type: [string, 'null'], format: uuid}
+        usage_date: {type: string, format: date}
+        billed_cost: {$ref: '#/components/schemas/Money'}
+        estimated_cost: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+        variance: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
+        variance_pct: {type: [number, 'null']}
+        source: {type: string, enum: [provider_api, invoice_manual]}
+        reconciled_at: {type: [string, 'null'], format: date-time}
+
+    AuditLog:
+      type: object
+      required: [id, actor_type, action, resource_type, outcome, occurred_at]
+      properties:
+        id: {type: string, format: uuid}
+        project_id: {type: [string, 'null'], format: uuid}
+        actor_type: {type: string, enum: [user, api_key, agent, system]}
+        actor_id: {type: [string, 'null'], format: uuid}
+        on_behalf_of: {type: [string, 'null'], format: uuid}
+        action: {type: string, examples: [agent.version.create, mcp_tool.call, approval.decide]}
+        resource_type: {type: string}
+        resource_id: {type: [string, 'null'], format: uuid}
+        outcome: {type: string, enum: [success, denied, error]}
+        execution_id: {type: [string, 'null'], format: uuid}
+        details: {type: object, additionalProperties: true}
+        ip: {type: [string, 'null']}
+        trace_id: {type: [string, 'null']}
+        occurred_at: {type: string, format: date-time}

@@ -1,0 +1,255 @@
+# Hạ tầng cho phát triển cục bộ.
+# Mật khẩu ở đây chỉ dùng cục bộ.
+name: mcp-platform
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: hq
+      POSTGRES_PASSWORD: hq
+      POSTGRES_DB: hq
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hq -d hq"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:8-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    # Redis chỉ chứa dữ liệu tái tạo được: không bật persistence.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+  # IdP cho phát triển cục bộ (ADR-0011). Chế độ start-dev: KHÔNG dùng cho production.
+  # Realm "hq" được import từ keycloak/hq-realm.json ở lần khởi động đầu:
+  #   - issuer: http://localhost:8180/realms/hq            → HQ_OIDC_ISSUER
+  #   - client "hq-api": resource server; token phải mang aud = hq-api → HQ_OIDC_AUDIENCE
+  #   - client "hq-cli": public client (PKCE; bật password grant CHỈ để thử cục bộ),
+  #     có mapper thêm aud = hq-api và mapper đưa thuộc tính user `org_id` vào token
+  #   - client "hq-web": public client của giao diện web (chỉ Authorization Code + PKCE,
+  #     redirect về http://localhost:8080/ui/), token mang aud = hq-api
+  #   - user dev / dev
+  # Console quản trị: http://localhost:8180 (admin / admin).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--http-port=8180", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    # User dev có `id` cố định trong hq-realm.json: realm được import lại mỗi lần container
+    # bị tạo lại (không có volume dữ liệu), nhưng `sub` của dev không đổi, nên tài khoản đã
+    # gắn với organization trong database vẫn là nó.
+    volumes: ["./keycloak:/opt/keycloak/data/import:ro"]
+    ports: ["127.0.0.1:8180:8180"]
+    # Image không có curl: hỏi metadata của realm bằng /dev/tcp của bash. Cổng mở trước khi
+    # realm được import, nên phải chờ đúng câu trả lời 200 này.
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8180 && printf 'GET /realms/hq/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+    profiles: ["idp", "app"]
+  # Proxy chỉ đọc đặt trước Docker socket, cho managed MCP server Docker. Chỉ bật
+  # nhóm API "containers" và chỉ cho phương thức GET (POST=0): liệt kê, inspect, log.
+  # Mọi API khác (exec, images, volumes, networks, tạo / xoá container) bị từ chối
+  # ngay tại proxy, độc lập với code của MCP server.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    # Cho MCP server Docker chạy trực tiếp trên máy (make run-docker-mcp). Proxy không có
+    # xác thực: chỉ bật profile này khi cần, và không bật cùng lúc với profile app (container
+    # của platform mang khoá trong biến môi trường, đọc được qua API inspect).
+    ports: ["127.0.0.1:2375:2375"]
+    profiles: ["docker"]
+  # Cùng proxy, cho profile app: KHÔNG publish cổng ra máy chủ. MCP server Docker tới nó
+  # qua mạng compose; không process nào khác trên máy đọc được API của Docker (và qua đó
+  # biến môi trường của container gateway) qua cổng này.
+  docker-proxy-internal:
+    image: tecnativa/docker-socket-proxy:0.3
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    profiles: ["app"]
+  # Temporal dev server (ADR-0002) cho phát triển cục bộ: một process, lưu trong bộ nhớ.
+  # KHÔNG dùng cho staging / production. Ghim theo digest (CLI 1.10.1, server 1.32.2).
+  #   - gRPC: localhost:7233 → HQ_TEMPORAL_ADDRESS
+  #   - UI:   http://localhost:8233
+  temporal:
+    image: temporalio/temporal@sha256:b228dadf9cdb6c7c02a1394b89dd76f827aac9760e458fce42f0899a10141225
+    # Không lưu ra đĩa: khởi động lại container là mất workflow đang chạy; execution
+    # dở dang khi đó được đóng timed_out lúc quá hạn.
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--search-attribute", "OrgId=Keyword", "--search-attribute", "ProjectId=Keyword"]
+    ports: ["127.0.0.1:7233:7233", "127.0.0.1:8233:8233"]
+    profiles: ["temporal", "app"]
+
+  # ---------------------------------------------------------------------------------
+  # Profile "app": platform chạy trong container (make up-all). CHỈ cho máy cục bộ.
+  #
+  # Mỗi service nhận ĐÚNG những biến nó được phép giữ (overview §"Ba process"): api
+  # không có khoá gốc của Secrets, khoá ký ngữ cảnh hay khoá LLM; worker không có khoá
+  # nào của Secrets hay LLM; MCP server chỉ có khoá ký ngữ cảnh. Vì vậy không service
+  # nào dùng `env_file`: giá trị được nội suy từng biến một từ file .env ở gốc repo
+  # (Makefile truyền `--env-file .env`). Biến thiếu được để rỗng ở đây (không dùng `${X:?}`: nó làm
+  # hỏng cả các lệnh compose không kèm .env như `make up`); process tự từ chối khởi động
+  # và nói rõ biến nào thiếu.
+  #
+  # Xác thực: token do Keycloak phát mang iss = http://localhost:8180/realms/hq (địa chỉ
+  # người dùng thấy); trong mạng compose các process đọc khoá của Keycloak ở
+  # http://keycloak:8180 (HQ_OIDC_DISCOVERY_URL, chỉ có tác dụng khi HQ_ENV=local).
+  #
+  # Model: container không có Claude CLI. Model dùng adapter `anthropic`, gọi qua
+  # gateway bằng HQ_ANTHROPIC_API_KEY (tốn tiền thật) hoặc khoá của org lưu trong Secrets.
+  # ---------------------------------------------------------------------------------
+  # Migration là một bước riêng chạy một lần, trước mọi process (không tự chạy khi
+  # process khởi động).
+  migrate:
+    image: mcp-platform:local
+    build: {context: ../.., dockerfile: Dockerfile}
+    command: ["/usr/local/bin/migrate", "up"]
+    environment:
+      HQ_MIGRATE_DATABASE_URL: postgres://hq:hq@postgres:5432/hq?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    profiles: ["app"]
+  # Tài khoản đăng nhập của từng process (như `make dev-db`). Process từ chối chạy bằng
+  # superuser; mỗi tài khoản chỉ là thành viên của đúng một role ứng dụng.
+  db-roles:
+    image: postgres:18-alpine
+    environment: {PGPASSWORD: hq}
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - hq
+      - -d
+      - hq
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+      - |
+        DO $$$$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='hq_api')     THEN CREATE ROLE hq_api     LOGIN PASSWORD 'hq' IN ROLE app_api;     END IF;
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='hq_gateway') THEN CREATE ROLE hq_gateway LOGIN PASSWORD 'hq' IN ROLE app_gateway; END IF;
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='hq_worker')  THEN CREATE ROLE hq_worker  LOGIN PASSWORD 'hq' IN ROLE app_worker;  END IF;
+        END $$$$;
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: "no"
+    profiles: ["app"]
+  gateway:
+    image: mcp-platform:local
+    command: ["/usr/local/bin/gateway"]
+    # File khoá gốc phải chỉ chủ sở hữu đọc được (0600): process chạy bằng uid của người
+    # giữ file trên máy chủ.
+    user: "${HQ_CONTAINER_UID:-1000}:${HQ_CONTAINER_GID:-1000}"
+    environment:
+      HQ_ENV: local
+      HQ_HTTP_ADDR: ":8081"
+      HQ_DATABASE_URL: postgres://hq_gateway:hq@postgres:5432/hq?sslmode=disable
+      HQ_REDIS_URL: redis://redis:6379/0
+      HQ_OIDC_ISSUER: ${HQ_OIDC_ISSUER:-http://localhost:8180/realms/hq}
+      HQ_OIDC_DISCOVERY_URL: http://keycloak:8180/realms/hq
+      HQ_GATEWAY_OIDC_AUDIENCE: ${HQ_GATEWAY_OIDC_AUDIENCE:-}
+      HQ_OIDC_ORG_CLAIM: ${HQ_OIDC_ORG_CLAIM:-org_id}
+      HQ_GATEWAY_PUBLIC_URL: http://localhost:8081
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY:-}
+      HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY:-}
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY:-}
+      HQ_SECRETS_ROOT_KEY_FILE: /run/secrets/hq_root_key
+      HQ_ANTHROPIC_API_KEY: ${HQ_ANTHROPIC_API_KEY:-}
+    secrets: [hq_root_key]
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      db-roles: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+      keycloak: {condition: service_healthy}
+    # Discovery chạy lúc khởi động: IdP không tới được thì process dừng (và được khởi
+    # động lại), thay vì lên mà không kiểm được token.
+    restart: unless-stopped
+    profiles: ["app"]
+  api:
+    image: mcp-platform:local
+    command: ["/usr/local/bin/api"]
+    environment:
+      HQ_ENV: local
+      HQ_HTTP_ADDR: ":8080"
+      HQ_DATABASE_URL: postgres://hq_api:hq@postgres:5432/hq?sslmode=disable
+      HQ_OIDC_ISSUER: ${HQ_OIDC_ISSUER:-http://localhost:8180/realms/hq}
+      HQ_OIDC_DISCOVERY_URL: http://keycloak:8180/realms/hq
+      HQ_OIDC_AUDIENCE: ${HQ_OIDC_AUDIENCE:-hq-api}
+      HQ_OIDC_ORG_CLAIM: ${HQ_OIDC_ORG_CLAIM:-org_id}
+      HQ_GATEWAY_INTERNAL_URL: http://gateway:8081
+      HQ_TEMPORAL_ADDRESS: temporal:7233
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY:-}
+      HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY:-}
+      HQ_SECRETS_PUBLIC_KEY: ${HQ_SECRETS_PUBLIC_KEY:-}
+      # Giao diện web ở http://localhost:8080/ui/ (public client hq-web của realm).
+      HQ_UI_OIDC_CLIENT_ID: ${HQ_UI_OIDC_CLIENT_ID:-hq-web}
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      db-roles: {condition: service_completed_successfully}
+      keycloak: {condition: service_healthy}
+      temporal: {condition: service_started}
+      # Thứ tự deploy: mọi worker trước, api sau (worker cũ không biết kế hoạch mới).
+      worker: {condition: service_started}
+    restart: unless-stopped
+    profiles: ["app"]
+  worker:
+    image: mcp-platform:local
+    command: ["/usr/local/bin/worker"]
+    environment:
+      HQ_ENV: local
+      HQ_HTTP_ADDR: ":8082"
+      HQ_DATABASE_URL: postgres://hq_worker:hq@postgres:5432/hq?sslmode=disable
+      HQ_GATEWAY_INTERNAL_URL: http://gateway:8081
+      HQ_TEMPORAL_ADDRESS: temporal:7233
+      HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY:-}
+    ports: ["127.0.0.1:8082:8082"]
+    depends_on:
+      db-roles: {condition: service_completed_successfully}
+      temporal: {condition: service_started}
+    restart: unless-stopped
+    profiles: ["app"]
+  # Managed MCP server Docker chỉ đọc, sau proxy chỉ đọc của Docker socket. Đăng ký trong
+  # Registry với endpoint http://integration-docker:8090/mcp. Một Docker host thuộc đúng
+  # một organization (HQ_DOCKER_ORG_ID).
+  integration-docker:
+    image: mcp-platform:local
+    command: ["/usr/local/bin/integration-docker"]
+    environment:
+      HQ_ENV: local
+      HQ_HTTP_ADDR: ":8090"
+      HQ_DOCKER_API_URL: http://docker-proxy-internal:2375
+      HQ_DOCKER_ORG_ID: ${HQ_DOCKER_ORG_ID:-}
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY:-}
+    ports: ["127.0.0.1:8090:8090"]
+    depends_on:
+      docker-proxy-internal: {condition: service_started}
+    restart: unless-stopped
+    profiles: ["app"]
+  # Công cụ quản trị, chạy theo lệnh: `make admin ARGS="org create -slug …"`. Nó dùng tài
+  # khoản quản trị của database và khoá ký ngữ cảnh (để discovery managed server); không
+  # service thường trực nào giữ tài khoản này.
+  hqadmin:
+    image: mcp-platform:local
+    entrypoint: ["/usr/local/bin/hqadmin"]
+    environment:
+      HQ_ADMIN_DATABASE_URL: postgres://hq:hq@postgres:5432/hq?sslmode=disable
+      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY:-}
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    profiles: ["tools"]
+secrets:
+  # Khoá gốc của Secrets: chỉ gateway được mount. Đường dẫn trên máy chủ do Makefile đặt
+  # từ HQ_SECRETS_ROOT_KEY_FILE của .env.
+  hq_root_key:
+    file: ${HQ_ROOT_KEY_HOST_FILE:-/dev/null}
+volumes:
+  pgdata:

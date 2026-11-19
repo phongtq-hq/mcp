@@ -1,0 +1,130 @@
+version: "2"
+overrides:
+  go:
+    overrides:
+      - db_type: uuid
+        go_type: github.com/google/uuid.UUID
+      - db_type: uuid
+        nullable: true
+        go_type: {import: github.com/google/uuid, type: UUID, pointer: true}
+      - db_type: timestamptz
+        go_type: time.Time
+      - db_type: timestamptz
+        nullable: true
+        go_type: {import: time, type: Time, pointer: true}
+      - db_type: jsonb
+        go_type: {import: encoding/json, type: RawMessage}
+sql:
+  - &ctx
+    engine: postgresql
+    schema: migrations
+    queries: internal/platform/tenancy/store/queries.sql
+    gen:
+      go: &gen
+        package: store
+        out: internal/platform/tenancy/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+  - <<: *ctx
+    queries: internal/platform/identity/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/platform/identity/store
+  - <<: *ctx
+    queries: internal/platform/authz/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/platform/authz/store
+  - <<: *ctx
+    queries: internal/audit/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/audit/store
+  - <<: *ctx
+    queries: internal/platform/idempotency/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/platform/idempotency/store
+  - <<: *ctx
+    queries: internal/agent/catalog/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/agent/catalog/store
+  - <<: *ctx
+    queries: internal/ai/modelcatalog/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/ai/modelcatalog/store
+  - <<: *ctx
+    queries: internal/cost/pricing/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/cost/pricing/store
+  - <<: *ctx
+    queries: internal/mcp/registry/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/mcp/registry/store
+  - <<: *ctx
+    queries: internal/mcp/gateway/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/mcp/gateway/store
+  - <<: *ctx
+    queries: internal/workflow/approval/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/workflow/approval/store
+  - <<: *ctx
+    queries: internal/cost/budget/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/cost/budget/store
+  - <<: *ctx
+    queries: internal/cost/ledger/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/cost/ledger/store
+  - <<: *ctx
+    queries: internal/agent/runtime/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/agent/runtime/store
+  - <<: *ctx
+    queries: internal/platform/secrets/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/platform/secrets/store
+  - <<: *ctx
+    queries: internal/platform/apikeys/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/platform/apikeys/store
+  - <<: *ctx
+    queries: internal/workflow/definitions/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/workflow/definitions/store
+  - <<: *ctx
+    queries: internal/workflow/notify/store/queries.sql
+    gen:
+      go:
+        <<: *gen
+        out: internal/workflow/notify/store

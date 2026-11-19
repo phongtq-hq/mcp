@@ -1,0 +1,5 @@
+# Sinh kiểu request / response từ .docs/api/openapi.yaml. Chạy: make generate
+package: api
+generate:
+  models: true
+output: internal/api/types.gen.go

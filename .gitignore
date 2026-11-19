@@ -1,0 +1,15 @@
+/bin/
+*.test
+*.out
+coverage.*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.claude/settings.local.json
+.secrets/
+# Giao diện web: phụ thuộc và bản build không vào repo (chỉ giữ file giữ chỗ cho go:embed).
+/web/node_modules/
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
