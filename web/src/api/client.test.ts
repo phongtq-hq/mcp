@@ -7,7 +7,7 @@ const auth = vi.hoisted(() => ({
 }));
 vi.mock('@/auth/oidc', () => auth);
 
-import { api, ApiError, get, getWithETag, soft } from './client';
+import { api, ApiError, get, getWithETag, resetRetryKeys, soft } from './client';
 
 function respond(status: number, body?: unknown): Response {
   return new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -20,6 +20,7 @@ beforeEach(() => {
   auth.accessToken.mockReset().mockResolvedValue('token-1');
   auth.expireSession.mockReset();
   vi.stubGlobal('fetch', fetchMock);
+  resetRetryKeys();
 });
 
 const headersOf = (call: number) => fetchMock.mock.calls[call]![1].headers as Record<string, string>;
@@ -44,6 +45,50 @@ describe('api', () => {
     expect(first).not.toBe(second);
     expect(headersOf(2)['Idempotency-Key']).toBeUndefined();
     expect(fetchMock.mock.calls[0]![1].body).toBe('{"decision":"reject"}');
+  });
+
+  it('gửi lại đúng request sau lỗi không rõ kết quả (mất mạng, 5xx) dùng lại Idempotency-Key', async () => {
+    const body = { slug: 'ops', name: 'Ops' };
+    fetchMock.mockRejectedValueOnce(new TypeError('failed to fetch'));
+    await expect(api('POST', '/projects', body)).rejects.toMatchObject({ status: 0 });
+    fetchMock.mockResolvedValueOnce(respond(503, { title: 'Service Unavailable' }));
+    await expect(api('POST', '/projects', body)).rejects.toMatchObject({ status: 503 });
+    fetchMock.mockResolvedValueOnce(respond(201, { id: 'p1' }));
+    await api('POST', '/projects', body);
+    const keys = [0, 1, 2].map(i => headersOf(i)['Idempotency-Key']);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).toBe(keys[0]);
+    // Đã thành công: lần tạo kế tiếp, dù cùng nội dung, là một việc mới.
+    fetchMock.mockResolvedValueOnce(respond(201, { id: 'p2' }));
+    await api('POST', '/projects', body);
+    expect(headersOf(3)['Idempotency-Key']).not.toBe(keys[0]);
+  });
+
+  it('không dùng lại khoá khi nội dung hoặc đường dẫn đổi, hoặc khi máy chủ đã trả lời từ chối', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('failed to fetch'));
+    await expect(api('POST', '/projects', { slug: 'ops' })).rejects.toMatchObject({ status: 0 });
+    fetchMock.mockImplementation(async () => respond(422, { title: 'Unprocessable', code: 'validation_failed' }));
+    await expect(api('POST', '/projects', { slug: 'ops-2' })).rejects.toMatchObject({ status: 422 });
+    await expect(api('POST', '/budgets', { slug: 'ops' })).rejects.toMatchObject({ status: 422 });
+    // 422 là câu trả lời dứt khoát: sửa xong gửi lại cùng thân cũng là khoá mới.
+    await expect(api('POST', '/projects', { slug: 'ops-2' })).rejects.toMatchObject({ status: 422 });
+    const keys = [0, 1, 2, 3].map(i => headersOf(i)['Idempotency-Key']);
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it('khoá giữ lại hết hạn sau 10 phút', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      fetchMock.mockRejectedValueOnce(new TypeError('failed to fetch'));
+      await expect(api('POST', '/projects', { slug: 'ops' })).rejects.toMatchObject({ status: 0 });
+      vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+      fetchMock.mockResolvedValueOnce(respond(201, {}));
+      await api('POST', '/projects', { slug: 'ops' });
+      expect(headersOf(1)['Idempotency-Key']).not.toBe(headersOf(0)['Idempotency-Key']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('401 kết thúc phiên', async () => {
