@@ -7,7 +7,7 @@ const auth = vi.hoisted(() => ({
 }));
 vi.mock('@/auth/oidc', () => auth);
 
-import { api, ApiError, get, soft } from './client';
+import { api, ApiError, get, getWithETag, soft } from './client';
 
 function respond(status: number, body?: unknown): Response {
   return new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -75,6 +75,33 @@ describe('api', () => {
   it('không tới được máy chủ: status 0', async () => {
     fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
     await expect(get('/projects')).rejects.toMatchObject({ status: 0 });
+  });
+
+  it('getWithETag trả ETag của tài nguyên; PATCH gửi lại nó ở If-Match', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"id":"p1"}', { status: 200, headers: { ETag: '"abc"' } }));
+    fetchMock.mockResolvedValueOnce(respond(200, { id: 'p1' }));
+    const read = await getWithETag<{ id: string }>('/projects/p1');
+    expect(read).toEqual({ data: { id: 'p1' }, etag: '"abc"' });
+    await api('PATCH', '/projects/p1', { name: 'x' }, { ifMatch: read.etag });
+    expect(headersOf(1)['If-Match']).toBe('"abc"');
+    expect(fetchMock.mock.calls[1]![1].method).toBe('PATCH');
+  });
+
+  it('không có ETag thì không gửi If-Match', async () => {
+    fetchMock.mockImplementation(async () => respond(200, {}));
+    await expect(getWithETag('/budgets/b1')).resolves.toEqual({ data: {}, etag: null });
+    await api('PATCH', '/budgets/b1', {}, { ifMatch: null });
+    await api('PATCH', '/budgets/b1', {});
+    expect(headersOf(1)['If-Match']).toBeUndefined();
+    expect(headersOf(2)['If-Match']).toBeUndefined();
+  });
+
+  it('412 và 422 giữ nguyên mã và lỗi theo trường', async () => {
+    fetchMock.mockResolvedValueOnce(respond(412, { title: 'Precondition Failed', code: 'precondition_failed' }));
+    await expect(api('PATCH', '/projects/p1', {}, { ifMatch: '"old"' })).rejects.toMatchObject({ status: 412, code: 'precondition_failed' });
+    fetchMock.mockResolvedValueOnce(respond(422, { title: 'Unprocessable', code: 'validation_failed', errors: [{ field: 'slug', message: 'đã tồn tại' }] }));
+    const err = await api('POST', '/projects', {}).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, fields: [{ field: 'slug', message: 'đã tồn tại' }] });
   });
 
   it('204 trả null', async () => {

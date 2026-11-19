@@ -37,6 +37,8 @@ export const vi = {
   navCost: 'Chi phí',
   navMcp: 'MCP server và tool',
   navAudit: 'Nhật ký audit',
+  navAdmin: 'Quản trị',
+  navOrganization: 'Organization',
 
   // Lỗi
   errTitle: 'Có lỗi xảy ra',
@@ -44,6 +46,42 @@ export const vi = {
   errNotFound: 'Không tìm thấy.',
   errNetwork: 'Không kết nối được tới máy chủ.',
   errSession: 'Phiên đăng nhập đã hết hạn. Đang chuyển tới trang đăng nhập…',
+  errConflict: 'Mục này đã bị thay đổi ở nơi khác kể từ lúc bạn mở nó. Tải lại trang rồi sửa lại; thay đổi của bạn chưa được lưu.',
+  invalidJson: 'JSON không hợp lệ.',
+
+  // Form và xác nhận
+  saving: 'Đang lưu…',
+  confirm: 'Xác nhận',
+  create: 'Tạo',
+  edit: 'Sửa',
+  delete: 'Xoá',
+  archive: 'Lưu trữ',
+  saved: 'Đã lưu.',
+  choose: '— chọn —',
+  generalInfo: 'Thông tin chung',
+  dangerZone: 'Vùng nguy hiểm',
+  advancedSettings: 'Cài đặt nâng cao (JSON)',
+  advancedSettingsHint: 'Toàn bộ settings được THAY bằng nội dung này. Máy chủ kiểm từng khoá khi lưu.',
+  settingsMustBeObject: 'Settings phải là một object JSON hợp lệ.',
+
+  // Dự án: tạo và cài đặt
+  newProject: 'Tạo dự án',
+  slugHint: 'Chữ thường, số và dấu gạch ngang; 2–63 ký tự.',
+  envHint: 'Không đổi được sau khi tạo.',
+  envRequired: 'Chọn môi trường của dự án.',
+  tabSettings: 'Cài đặt',
+  orchestration: 'Điều phối (mode planned)',
+  plannedEnabled: 'Cho phép lần chạy theo kế hoạch (mode planned)',
+  plannedEnabledHint: 'Cũng là điều kiện để chạy workflow trong dự án này.',
+  plannerAgent: 'Agent lập kế hoạch',
+  plannerAgentHint: 'Dùng khi yêu cầu đề xuất kế hoạch. Agent này không được có tool hay delegation và phải có budget.',
+  plannerAgentNoList: 'Không đọc được danh sách Agent của dự án; chỉ giữ hoặc bỏ Agent đang chọn.',
+  maxParallelTasks: 'Số task chạy đồng thời',
+  maxParallelTasksHint: 'Từ 1 đến 8. Để trống: mặc định của platform.',
+  archiveProject: 'Lưu trữ dự án',
+  archiveProjectConfirm: 'Lưu trữ dự án “{name}”?',
+  archiveProjectBody: 'Dự án được lưu trữ (xoá mềm). Thao tác này không hoàn tác được từ giao diện.',
+  organizationLead: 'Tên và cài đặt chung của organization.',
 
   // Tổng quan
   overviewLead: 'Tình trạng hiện tại của organization.',
