@@ -1,6 +1,6 @@
 ---
 name: review-change
-description: Review một thay đổi của MCP Platform bằng các agent chuyên trách (architecture-reviewer, security-reviewer, db-reviewer, runtime-reviewer), chỉ gọi những agent khớp với vùng code bị chạm, rồi tổng hợp và kiểm chứng phát hiện. Dùng sau khi hoàn thành một thay đổi đáng kể, trước khi commit hoặc mở PR.
+description: Review một thay đổi của MCP Platform bằng các agent chuyên trách (architecture-reviewer, security-reviewer, db-reviewer, runtime-reviewer, ui-reviewer), chỉ gọi những agent khớp với vùng code bị chạm, rồi tổng hợp và kiểm chứng phát hiện. Dùng sau khi hoàn thành một thay đổi đáng kể, trước khi commit hoặc mở PR.
 argument-hint: [đường dẫn, commit range, hoặc để trống cho thay đổi chưa commit]
 ---
 
@@ -20,6 +20,7 @@ Lấy danh sách file bị chạm (`git status`, `git diff --stat`, hoặc đư�
 | `internal/platform/**`, `internal/mcp/**`, `internal/workflow/approval/**`, `internal/audit/**`, endpoint mới, xử lý URL hoặc input ngoài, `internal/integration/**` | `security-reviewer` |
 | `migrations/**`, `*.sql`, `internal/**/store/**` | `db-reviewer` |
 | `internal/agent/**`, `internal/workflow/**`, `cmd/worker/**`, `internal/cost/**`, `internal/ai/**` | `runtime-reviewer` |
+| `web/**`, `internal/webui/**` (thêm `security-reviewer` nếu chạm `web/src/auth/**`, màn hình duyệt, hoặc `web/package.json`) | `ui-reviewer` |
 
 Chỉ gọi agent có vùng bị chạm. Thay đổi chỉ sửa tài liệu hoặc một dòng không cần agent: tự đọc và nhận xét.
 
@@ -37,7 +38,7 @@ Báo cáo của agent là phát hiện cần kiểm, không phải sự thật:
 
 Một danh sách duy nhất, nghiêm trọng nhất trước:
 
-- **Chặn:** vỡ cách ly tenant, lộ secret, vượt approval, tool ghi chạy hai lần, vòng lặp không trần, phá ranh giới context, migration khoá bảng hoặc mất dữ liệu.
+- **Chặn:** vỡ cách ly tenant, lộ secret, vượt approval, tool ghi chạy hai lần, vòng lặp không trần, phá ranh giới context, migration khoá bảng hoặc mất dữ liệu, giao diện đưa HTML thô vào DOM / cần nới CSP / phá bất biến màn hình duyệt.
 - **Nên sửa**
 - **Cần quyết định:** chỗ thiết kế và code mâu thuẫn hoặc thiết kế chưa nói.
 
