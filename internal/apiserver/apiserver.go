@@ -228,7 +228,7 @@ func settingsValidator(routes *router.Service) func(ctx context.Context, setting
 		}
 		o, err := orchestrator.ParseSettings(settings)
 		if err != nil {
-			return nil, apperr.New(apperr.KindUnprocessable, "validation_failed", err.Error())
+			return nil, apperr.InvalidField("settings", err.Error())
 		}
 		if o.PlannedEnabled || o.PlannerAgentID != nil {
 			if details == nil {

@@ -58,3 +58,11 @@ export function shortId(id: string | null | undefined): string { return id ? Str
 export function isUuid(s: string | undefined): s is string {
   return typeof s === 'string' && /^[0-9a-f-]{36}$/.test(s);
 }
+
+// localInputToISO: giá trị của <input type="datetime-local"> (giờ địa phương, không múi giờ)
+// thành thời điểm RFC 3339 theo UTC. Trả null khi rỗng hoặc không đọc được.
+export function localInputToISO(value: string): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}

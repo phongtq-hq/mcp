@@ -228,6 +228,18 @@ func TestModelCatalogAPI(t *testing.T) {
 		if n := len(e.do("GET", path, adminA, nil, nil).json(t)["data"].([]any)); n != 2 {
 			t.Errorf("request sai để lại giá: còn %d dòng", n)
 		}
+		// Không gửi effective_from: giá áp dụng ngay theo giờ máy chủ (model khác, để không
+		// đụng các dòng giá của sonnet được kiểm bên dưới).
+		before := time.Now().Add(-time.Second)
+		now := e.do("POST", "/v1/models/"+haiku+"/pricing", adminA, map[string]any{"currency": "USD", "input_per_mtok": "1", "output_per_mtok": "2"}, nil)
+		want(t, now, 201, "")
+		if at, err := time.Parse(time.RFC3339Nano, now.json(t)["effective_from"].(string)); err != nil || at.Before(before) || at.After(time.Now().Add(time.Second)) {
+			t.Errorf("effective_from mặc định = %v (%v), muốn giờ máy chủ lúc tạo", now.json(t)["effective_from"], err)
+		}
+		if priced := e.do("GET", "/v1/models/"+haiku, adminA, nil, nil).json(t)["has_current_pricing"]; priced != true {
+			t.Errorf("giá áp dụng ngay phải có hiệu lực ngay: has_current_pricing = %v", priced)
+		}
+
 		// Audit ghi đủ để tự tra: dòng mới, dòng bị đóng, các đơn giá.
 		var full int
 		_ = e.db.Admin.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action = 'model_pricing.create' AND resource_id = $1

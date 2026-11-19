@@ -228,6 +228,26 @@ describe('Cài đặt dự án', () => {
     await waitFor(() => expect(client.api).toHaveBeenCalledWith('PATCH', '/projects/' + P, { settings: { a: 1 } }, { ifMatch: '"e1"' }));
   });
 
+  it('định tuyến ghi đè của dự án: lưu giữ nguyên orchestration và các khoá khác, dùng chung ETag với các mục kia', async () => {
+    const MODEL_ID = '0193a1b2-0000-7000-8000-0000000000cc';
+    let n = 0;
+    client.getWithETag.mockImplementation(async () => ({ data: project({ settings: { orchestration: { planned_enabled: true }, khac: 1 } }), etag: `"e${++n}"` }));
+    client.get.mockImplementation(async path => (path.startsWith('/models') ? { data: [{ id: MODEL_ID, display_name: 'Model X' }], next_cursor: null } : agentsPage));
+    client.api.mockResolvedValue(project());
+    show(`/projects/${P}/settings`);
+    const ROUTING = 'Định tuyến theo tier (ghi đè của dự án)';
+    await screen.findByLabelText('Tên');
+    const primary = section(ROUTING).querySelectorAll('select')[0]!; // model chính của tier economy
+    fireEvent.change(primary, { target: { value: MODEL_ID } });
+    // Đang sửa định tuyến thì mục điều phối bị khoá.
+    expect(section(ORCH).querySelector('fieldset')!.disabled).toBe(true);
+    saveIn(ROUTING);
+    await waitFor(() => expect(client.api).toHaveBeenCalledWith('PATCH', '/projects/' + P, {
+      settings: { orchestration: { planned_enabled: true }, khac: 1, model_routing: { tiers: { economy: { models: [MODEL_ID] } } } },
+    }, { ifMatch: '"e1"' }));
+    await waitFor(() => expect(section(ROUTING).textContent).toContain('Đã lưu.'));
+  });
+
   it('lưu trữ: huỷ xác nhận thì không gọi DELETE; xác nhận thì gọi và về danh sách', async () => {
     loaded();
     client.api.mockResolvedValue(null);

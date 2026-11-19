@@ -155,6 +155,10 @@ func (s *Service) CreatePricing(ctx context.Context, modelID uuid.UUID, in Creat
 	// sinh (đối soát, báo cáo) phải ra đúng con số đã dùng lúc ghi usage. Dung sai
 	// lùi chỉ để bù lệch đồng hồ; thời điểm bắt đầu thực tế do database quyết định.
 	now := time.Now()
+	// Không gửi effective_from: áp dụng ngay, theo giờ máy chủ.
+	if in.EffectiveFrom.IsZero() {
+		in.EffectiveFrom = now
+	}
 	if in.EffectiveFrom.Before(now.Add(-maxBackdate)) {
 		return Pricing{}, invalidField("effective_from", "effective_from không được ở quá khứ: giá chỉ áp dụng từ hiện tại trở đi")
 	}

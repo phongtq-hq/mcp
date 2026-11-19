@@ -5,6 +5,7 @@ import { api, get, getWithETag, soft, type Page as PageOf, type Schemas, type Wi
 import { Async } from '@/components/async';
 import { useConfirm } from '@/components/confirm';
 import { CheckField, Form, SelectField, SubmitError, TextField } from '@/components/form';
+import { RoutingForm } from '@/components/routing-form';
 import { Section, useSections } from '@/components/sections';
 import { SettingsForm } from '@/components/settings-form';
 import { useSubmit } from '@/components/use-submit';
@@ -12,12 +13,13 @@ import { t } from '@/i18n';
 
 type Project = Schemas['Project'];
 type Agent = Schemas['Agent'];
+type Model = Schemas['Model'];
 
 function asObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-interface Loaded { project: WithETag<Project>; agents: Agent[] | null }
+interface Loaded { project: WithETag<Project>; agents: Agent[] | null; models: { value: string; label: string }[] | null; modelsTruncated: boolean }
 
 interface FormProps {
   loaded: Loaded;
@@ -117,11 +119,12 @@ export default function ProjectSettingsTab() {
   const query = useQuery({
     queryKey: ['project', projectId, 'settings'],
     queryFn: async (): Promise<Loaded> => {
-      const [project, agents] = await Promise.all([
+      const [project, agents, models] = await Promise.all([
         getWithETag<Project>('/projects/' + projectId),
         soft(get<PageOf<Agent>>(`/projects/${projectId}/agents?limit=200`)),
+        soft(get<PageOf<Model>>('/models?enabled=true&limit=200')),
       ]);
-      return { project, agents: agents ? agents.data : null };
+      return { project, agents: agents ? agents.data : null, models: models ? models.data.map(m => ({ value: m.id, label: m.display_name })) : null, modelsTruncated: !!models?.next_cursor };
     },
   });
   return (
@@ -153,6 +156,18 @@ export default function ProjectSettingsTab() {
             </Section>
             <Section name="orchestration" title={t('orchestration')} sections={sections} narrow>
               <OrchestrationForm key={version} {...props('orchestration')} />
+            </Section>
+            <Section name="routing" title={t('projectRouting')} sections={sections}>
+              <p className="muted">{t('projectRoutingHint')}</p>
+              <RoutingForm
+                key={version}
+                settings={loaded.project.data.settings}
+                models={loaded.models}
+                truncated={loaded.modelsTruncated}
+                save={settings => patch({ settings })}
+                onChange={() => sections.touch('routing')}
+                onSaved={saved('routing')}
+              />
             </Section>
             <Section name="settings" title={t('advancedSettings')} sections={sections}>
               <SettingsForm

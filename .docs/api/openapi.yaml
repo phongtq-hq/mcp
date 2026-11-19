@@ -923,7 +923,7 @@ paths:
     delete:
       tags: [Models]
       operationId: deleteModelProvider
-      summary: Trả 409 nếu còn Agent Version đang hoạt động dùng model của provider
+      summary: Xoá provider không còn model nào. Trả 409 `provider_in_use` nếu provider còn model (tắt nó thay vì xoá)
       responses:
         '204': {description: Deleted}
         default: {$ref: '#/components/responses/Problem'}
@@ -2098,7 +2098,7 @@ components:
         source: {type: [string, 'null']}
     ModelPricingCreate:
       type: object
-      required: [currency, input_per_mtok, output_per_mtok, effective_from]
+      required: [currency, input_per_mtok, output_per_mtok]
       properties:
         currency: {type: string}
         input_per_mtok: {type: string}
@@ -2106,7 +2106,13 @@ components:
         cached_input_per_mtok: {type: string}
         cache_write_per_mtok: {type: string}
         reasoning_per_mtok: {type: string}
-        effective_from: {type: string, format: date-time}
+        effective_from:
+          type: string
+          format: date-time
+          description: >-
+            Thời điểm giá bắt đầu hiệu lực. Bỏ trống = ngay bây giờ theo giờ máy chủ (client không
+            phải gửi giờ của mình, và request gửi lại có cùng thân). Không được ở quá khứ, không xa
+            hơn một năm.
         source: {type: string}
 
     Budget:

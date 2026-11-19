@@ -14,6 +14,7 @@ const NAV: readonly NavItem[] = [
   ['/projects', 'navProjects'],
   ['/approvals', 'navApprovals'],
   ['/cost', 'navCost'],
+  ['/models', 'navModels'],
   ['/mcp', 'navMcp'],
 ];
 // Nhóm Quản trị: cấu hình của cả organization.

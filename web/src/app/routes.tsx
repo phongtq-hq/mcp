@@ -19,6 +19,11 @@ const ApprovalDetail = lazy(() => import('@/features/approvals/approval-detail-p
 const Cost = lazy(() => import('@/features/cost/cost-page'));
 const Mcp = lazy(() => import('@/features/mcp/mcp-page'));
 const Audit = lazy(() => import('@/features/audit/audit-page'));
+const Models = lazy(() => import('@/features/models/models-page'));
+const Model = lazy(() => import('@/features/models/model-page'));
+const Providers = lazy(() => import('@/features/models/providers-page'));
+const Provider = lazy(() => import('@/features/models/provider-page'));
+const Routing = lazy(() => import('@/features/models/routing-page'));
 
 export function AppRoutes() {
   return (
@@ -39,6 +44,11 @@ export function AppRoutes() {
           <Route path="approvals" element={<Approvals />} />
           <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
           <Route path="cost" element={<Cost />} />
+          <Route path="models" element={<Models />} />
+          <Route path="models/providers" element={<Providers />} />
+          <Route path="models/providers/:providerId" element={<Provider />} />
+          <Route path="models/routing" element={<Routing />} />
+          <Route path="models/:modelId" element={<Model />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="audit" element={<Audit />} />
           <Route path="admin/organization" element={<Organization />} />

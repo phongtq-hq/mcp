@@ -747,7 +747,7 @@ func (s *Service) ResolveForUse(ctx context.Context, id uuid.UUID) (Usable, erro
 	case !row.ProviderEnabled:
 		return Usable{}, invalid("provider của model đang bị tắt")
 	case !slices.Contains(s.adapters, row.Adapter):
-		return Usable{}, invalidField("adapter", "adapter của model không có ở môi trường này")
+		return Usable{}, invalid("adapter của model không có ở môi trường này")
 	}
 	var caps struct {
 		ToolCalling   bool `json:"tool_calling"`

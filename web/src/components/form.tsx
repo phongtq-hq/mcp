@@ -38,7 +38,9 @@ interface TextProps extends FieldProps {
   placeholder?: string;
   disabled?: boolean;
   maxLength?: number;
-  // autoComplete "off" cho ô nhập secret: trình duyệt không lưu, không gợi ý lại.
+  // Ô nhập secret dùng "new-password": trình duyệt bỏ qua "off" trên ô password, còn
+  // "new-password" ngăn nó tự điền mật khẩu đã lưu của origin vào đây. Trình quản lý mật khẩu
+  // vẫn có thể mời lưu giá trị vừa gõ; đó là quyết định của người dùng, giao diện không chặn được.
   autoComplete?: string;
   mono?: boolean;
 }
