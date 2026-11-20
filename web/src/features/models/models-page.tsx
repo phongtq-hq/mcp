@@ -6,7 +6,7 @@ import { pages, rows } from '@/api/paging';
 import { DataTable } from '@/components/data-table';
 import { Form, SelectField, TextField } from '@/components/form';
 import { LoadMore } from '@/components/load-more';
-import { Badge, ErrorBox, Notice, Page, Spinner } from '@/components/ui';
+import { Badge, ErrorBox, Notice, Page, Spinner, Success } from '@/components/ui';
 import { useSubmit } from '@/components/use-submit';
 import { t, tOr } from '@/i18n';
 import { capabilitiesOf, draftOf, ModelFields, type ModelDraft } from './model-fields';
@@ -46,7 +46,7 @@ function CreateModel({ providers }: { providers: Provider[] | null | undefined }
         <TextField label={t('providerModel')} required mono value={providerModel} onChange={v => { setProviderModel(v); setCreated(null); }} error={submit.fields.provider_model} hint={t('providerModelHint')} maxLength={200} />
         <ModelFields draft={draft} onChange={setDraft} errors={submit.fields} />
       </Form>
-      {created && !submit.error ? <Notice kind="ok">{t('modelCreated', { name: created })}</Notice> : null}
+      {created && !submit.error ? <Success>{t('modelCreated', { name: created })}</Success> : null}
     </section>
   );
 }

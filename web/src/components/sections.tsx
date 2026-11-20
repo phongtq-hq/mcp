@@ -4,7 +4,7 @@
 // các mục còn lại cho tới khi nó được lưu hoặc bỏ.
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { t } from '@/i18n';
-import { Notice } from './ui';
+import { Notice, Success } from './ui';
 
 export interface Sections {
   // Tên mục đang có thay đổi chưa lưu (null nếu không có).
@@ -47,7 +47,7 @@ export function Section({ name, title, sections, narrow, children }: Props) {
       {sections.dirty === name ? (
         <div className="row"><button type="button" className="ghost" onClick={sections.discard}>{t('discardChanges')}</button></div>
       ) : null}
-      {sections.saved === name ? <Notice kind="ok">{t('saved')}</Notice> : null}
+      {sections.saved === name ? <Success>{t('saved')}</Success> : null}
     </section>
   );
 }

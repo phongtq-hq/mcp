@@ -62,9 +62,17 @@ describe('Tab lần chạy', () => {
     serve();
     show(`/projects/${P}/executions`);
     expect(await screen.findByText('Kiểm tra container')).toBeTruthy();
-    expect(screen.queryByLabelText('Yêu cầu')).toBeNull();
+    // Form có sẵn trong trang nhưng bị ẩn (thuộc tính hidden) cho tới khi bấm.
+    const hiddenForm = () => screen.getByLabelText('Yêu cầu').closest('[hidden]');
+    expect(hiddenForm()).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Chạy Agent' }));
-    expect(screen.getByLabelText('Yêu cầu')).toBeTruthy();
+    expect(hiddenForm()).toBeNull();
+    // Đóng lại không làm mất nội dung đang gõ.
+    fireEvent.change(screen.getByLabelText('Yêu cầu'), { target: { value: 'đang gõ dở' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Đóng' }));
+    expect(hiddenForm()).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Chạy Agent' }));
+    expect((screen.getByLabelText('Yêu cầu') as HTMLTextAreaElement).value).toBe('đang gõ dở');
     expect(client.api).not.toHaveBeenCalled();
   });
 

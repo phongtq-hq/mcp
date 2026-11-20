@@ -409,4 +409,5 @@ export const en: Record<Key, string> = {
   flowReplay: 'Replay',
   flowStop: 'Stop',
   flowModel: 'Model',
+  noApprovalsHint: 'When an agent calls a tool that needs approval, the request appears here and that run waits.',
 };

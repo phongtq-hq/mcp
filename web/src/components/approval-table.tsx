@@ -24,6 +24,7 @@ export function ApprovalTable({ rows }: { rows: ApprovalRow[] }) {
       rowKey={a => a.id}
       onRow={a => navigate('/approvals/' + a.id)}
       emptyText={t('noApprovals')}
+      emptyHint={t('noApprovalsHint')}
       columns={[
         { label: t('subject'), cell: a => <><div className="small muted">{subjectLabel(a)}</div><div className="clip">{subjectText(a)}</div></> },
         { label: t('risk'), cell: a => <RiskBadge risk={a.risk_level} /> },

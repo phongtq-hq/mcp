@@ -213,8 +213,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 @starting-style { .reveal { opacity: 0; transform: translateY(-6px) scale(.985); } }
 dialog.confirm { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
 @starting-style { dialog.confirm[open] { opacity: 0; transform: scale(.96); } }
-.assistant-panel { transform-origin: bottom right; transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
-@starting-style { .assistant-panel { opacity: 0; transform: scale(.9); } }
 .assistant-msg { animation: fade-up var(--dur-base) var(--ease-out) both; }
 
 /* "Dòng nào mới từ lần làm mới trước": dòng mới trượt vào và mang một vệt màu vài giây. */
@@ -294,3 +292,14 @@ tbody tr.row-new td { animation: row-mark var(--dur-mark) var(--ease-in-out) bot
 @keyframes flow-run-y { from { transform: translateY(0); } to { transform: translateY(calc(1.25rem - 10px)); } }
 .flow-lane .flow-node { width: 12rem; }
 @media (max-width: 820px) { .flow-lane .flow-node { width: auto; } }
+
+/* "Thứ này vừa quay về chỗ nó được mở": phần tử ẩn bằng `hidden` thu lại rồi mới biến mất
+   (display đổi rời rạc ở cuối chuyển tiếp); mở ra thì đi từ trạng thái ẩn. Không chặn thao
+   tác: phần tử đang thu không nhận con trỏ. */
+.closable { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out), display var(--dur-base) allow-discrete; transform-origin: top right; }
+.closable[hidden] { display: none; opacity: 0; transform: translateY(-6px) scale(.985); pointer-events: none; }
+@starting-style { .closable:not([hidden]) { opacity: 0; transform: translateY(-6px) scale(.985); } }
+.closable.from-corner { transform-origin: bottom right; }
+.closable.from-corner[hidden] { transform: scale(.9); }
+@starting-style { .closable.from-corner:not([hidden]) { transform: scale(.9); } }
+.outcome { display: inline-flex; align-items: center; gap: .4rem; }

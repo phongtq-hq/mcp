@@ -827,7 +827,6 @@ func TestMCPRegistryIsolation(t *testing.T) {
 		"tool của org A dưới server của org B":          `INSERT INTO mcp_tools (org_id, server_id, server_version_id, name, input_schema, definition_hash) VALUES ('` + orgA.String() + `','` + servers["sb"].String() + `','` + versions["sb"].String() + `','x','{"type":"object"}','\x00')`,
 		"version chưa duyệt làm version hoạt động":      `UPDATE mcp_servers SET active_version_id = '` + pending.String() + `' WHERE id = '` + servers["sa"].String() + `'`,
 		"version của server khác làm version hoạt động": `UPDATE mcp_servers SET active_version_id = '` + versions["sb"].String() + `' WHERE id = '` + servers["sa"].String() + `'`,
-		"đổi endpoint của server":                       `UPDATE mcp_servers SET endpoint = 'http://evil' WHERE id = '` + servers["sa"].String() + `'`,
 		"sửa ảnh chụp của version":                      `UPDATE mcp_server_versions SET snapshot = '{"x":1}' WHERE id = '` + versions["sa"].String() + `'`,
 		"đổi kết quả duyệt":                             `UPDATE mcp_server_versions SET review_status = 'rejected' WHERE id = '` + versions["sa"].String() + `'`,
 		"xoá version":                                   `DELETE FROM mcp_server_versions WHERE id = '` + pending.String() + `'`,
@@ -845,6 +844,33 @@ func TestMCPRegistryIsolation(t *testing.T) {
 		}
 		_ = tx.Rollback(ctx)
 	}
+
+	// Endpoint của server NGOÀI (do tenant đăng ký) không đổi được, kể cả với app_admin.
+	// Migration 00037 cố ý cho app_admin đổi endpoint của managed server (đường
+	// `hqadmin mcp-server set-endpoint`, có test ở tests/api); trigger của migration 00038
+	// giữ luật cho server ngoài. Server ngoài được tạo trong chính transaction này rồi
+	// rollback, để các phép đếm bên dưới không đổi.
+	func() {
+		tx, err := db.Admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		external := ids.New()
+		if _, err := tx.Exec(ctx, `INSERT INTO mcp_servers (id, org_id, slug, name, kind, transport, endpoint, auth_method) VALUES ($1,$2,'ea','E','external','streamable_http','https://x','org_secret')`, external, orgA); err != nil {
+			t.Fatalf("tạo server ngoài: %v", err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_admin"); err != nil {
+			t.Fatal(err)
+		}
+		// Phải bị chặn bởi trigger (luật theo loại server), không phải vì thiếu quyền trên cột.
+		_, err = tx.Exec(ctx, `UPDATE mcp_servers SET endpoint = 'https://evil' WHERE id = $1`, external)
+		if err == nil {
+			t.Error("đổi endpoint của server ngoài: database chấp nhận")
+		} else if !strings.Contains(err.Error(), "không đổi được") {
+			t.Errorf("đổi endpoint của server ngoài bị từ chối vì lý do khác với trigger: %v", err)
+		}
+	}()
 
 	for _, role := range []string{"app_api", "app_gateway"} {
 		err := tenancy.InTx(tenancy.WithOrg(ctx, orgA), db.PoolAs(t, role, 1), func(tx pgxv5.Tx) error {

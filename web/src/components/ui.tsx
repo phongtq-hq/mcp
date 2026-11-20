@@ -66,6 +66,12 @@ export function Notice({ kind, children }: { kind: NoticeKind; children: ReactNo
   return <div className={'notice ' + kind} role={kind === 'bad' ? 'alert' : 'status'}>{children}</div>;
 }
 
+// Success: kết quả thành công của một thao tác, hiện ngay cạnh chỗ vừa bấm. Có dấu tích (hình,
+// không chỉ màu) và được trình đọc màn hình đọc lên (role="status" của Notice).
+export function Success({ children }: { children: ReactNode }) {
+  return <Notice kind="ok"><span className="outcome"><StatusIcon tone="ok" />{children}</span></Notice>;
+}
+
 export function ErrorBox({ error }: { error: unknown }) {
   let text = error instanceof Error && error.message ? error.message : String(error);
   if (error instanceof ApiError) {

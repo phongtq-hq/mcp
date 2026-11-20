@@ -48,7 +48,7 @@ function RunForm({ projectId, agents }: { projectId: string; agents: Agent[] }) 
   };
 
   return (
-    <form className="card form reveal" onSubmit={e => { void submit(e); }}>
+    <form className="card form" onSubmit={e => { void submit(e); }}>
       <div><strong>{t('newExecution')}</strong><div className="small muted">{t('newExecutionLead')}</div></div>
       <label>
         {t('chooseAgent')}
@@ -110,7 +110,9 @@ export default function ExecutionsTab() {
         <span className="spacer" />
         <button type="button" className={hint && !running ? 'primary attention' : 'primary'} aria-expanded={running} onClick={() => setRunning(v => !v)}>{running ? t('close') : t('newExecution')}</button>
       </div>
-      {running ? <RunForm projectId={projectId} agents={known.filter(a => a.status === 'active' && a.active_version)} /> : null}
+      {/* Form được giữ trong trang và ẩn bằng `hidden`: đóng lại không mất nội dung đang gõ, và có
+          hiệu ứng thu về chỗ nút. */}
+      <div className="closable" hidden={!running}><RunForm projectId={projectId} agents={known.filter(a => a.status === 'active' && a.active_version)} /></div>
       <Async query={list}>
         {data => (
           <>

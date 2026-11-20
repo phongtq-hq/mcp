@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router';
 import { api, get, type Page as PageOf, type Schemas } from '@/api/client';
 import { Async } from '@/components/async';
 import { DataTable } from '@/components/data-table';
-import { ErrorBox, Notice, StatusBadge } from '@/components/ui';
+import { ErrorBox, StatusBadge, Success } from '@/components/ui';
 import { t, tOr } from '@/i18n';
 import { fmtDuration, fmtTime } from '@/lib/format';
 
@@ -76,7 +76,7 @@ export default function WorkflowsTab() {
 
   return (
     <>
-      {status ? (status.ok ? <Notice kind="ok">{t('workflowStarted')}</Notice> : <ErrorBox error={status.error} />) : null}
+      {status ? (status.ok ? <Success>{t('workflowStarted')}</Success> : <ErrorBox error={status.error} />) : null}
       <Async query={query}>
         {r => (
           <DataTable

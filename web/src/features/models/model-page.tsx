@@ -8,7 +8,7 @@ import { DataTable } from '@/components/data-table';
 import { CheckField, Form, TextField } from '@/components/form';
 import { LoadMore } from '@/components/load-more';
 import { Section, useSections } from '@/components/sections';
-import { Badge, ErrorBox, KV, Notice, Page, Spinner } from '@/components/ui';
+import { Badge, ErrorBox, KV, Notice, Page, Spinner, Success } from '@/components/ui';
 import { useSubmit } from '@/components/use-submit';
 import { t } from '@/i18n';
 import { fmtRate, fmtTime, isUuid, localInputToISO } from '@/lib/format';
@@ -82,7 +82,7 @@ function PricingForm({ modelId, onSaved }: { modelId: string; onSaved: () => Pro
       <CheckField label={t('priceFromNow')} checked={now} onChange={setNow} />
       {now ? null : <TextField label={t('priceFrom')} type="datetime-local" required value={from} onChange={setFrom} error={submit.fields.effective_from} hint={t('priceFromHint')} />}
       <TextField label={t('priceSource')} value={source} onChange={setSource} error={submit.fields.source} hint={t('priceSourceHint')} maxLength={500} />
-      {done && !submit.error ? <Notice kind="ok">{t('saved')}</Notice> : null}
+      {done && !submit.error ? <Success>{t('saved')}</Success> : null}
     </Form>
   );
 }

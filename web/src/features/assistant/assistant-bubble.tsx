@@ -149,7 +149,7 @@ export default function AssistantBubble() {
   if (!target) return null;
   return (
     <div className="assistant">
-      {used ? <div hidden={!open}><Panel projectId={target.projectId} agentId={target.agentId} open={open} onClose={() => setOpen(false)} /></div> : null}
+      {used ? <div className="closable from-corner" hidden={!open}><Panel projectId={target.projectId} agentId={target.agentId} open={open} onClose={() => setOpen(false)} /></div> : null}
       <button type="button" className="assistant-toggle primary" aria-expanded={open} onClick={() => { setUsed(true); setOpen(v => !v); }}>
         {t('assistantTitle')}
       </button>

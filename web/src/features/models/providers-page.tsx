@@ -6,7 +6,7 @@ import { pages, rows } from '@/api/paging';
 import { DataTable } from '@/components/data-table';
 import { Form, TextField } from '@/components/form';
 import { LoadMore } from '@/components/load-more';
-import { Badge, ErrorBox, Notice, Page, Spinner } from '@/components/ui';
+import { Badge, ErrorBox, Page, Spinner, Success } from '@/components/ui';
 import { useSubmit } from '@/components/use-submit';
 import { t, tOr } from '@/i18n';
 import { ApiError } from '@/lib/api-error';
@@ -45,7 +45,7 @@ function CreateProvider() {
         <TextField label={t('adapter')} required mono value={adapter} onChange={setAdapter} error={submit.fields.adapter} hint={t('adapterHint')} />
         <TextField label={t('apiKey')} type="password" autoComplete="new-password" value={apiKey} onChange={setApiKey} error={submit.fields.api_key} hint={t('apiKeyHint')} />
       </Form>
-      {created && !submit.error ? <Notice kind="ok">{t('providerCreated', { slug: created })}</Notice> : null}
+      {created && !submit.error ? <Success>{t('providerCreated', { slug: created })}</Success> : null}
     </section>
   );
 }

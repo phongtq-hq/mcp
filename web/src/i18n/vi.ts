@@ -442,6 +442,7 @@ export const vi = {
   flowReplay: 'Phát lại',
   flowStop: 'Dừng',
   flowModel: 'Model',
+  noApprovalsHint: 'Khi một Agent gọi tool cần người duyệt, yêu cầu sẽ hiện ở đây và lần chạy đó dừng lại chờ.',
 };
 
 export type Key = keyof typeof vi;
