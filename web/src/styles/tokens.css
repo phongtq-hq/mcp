@@ -1,0 +1,73 @@
+/* Design token của giao diện: mọi màu, khoảng cách, cỡ chữ, bo góc, đổ bóng và CHUYỂN ĐỘNG
+   lấy từ đây. Component và app.css không viết số thời lượng hay easing rải rác. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #dfe3ea;
+  --text: #171a21;
+  --muted: #5d6675;
+  --accent: #1f5eff;
+  --accent-text: #ffffff;
+  --ok: #0f7b3f;
+  --ok-bg: #e2f5ea;
+  --warn: #8a5a00;
+  --warn-bg: #fdf1d3;
+  --bad: #b3261e;
+  --bad-bg: #fde7e5;
+  --info: #1b4fb8;
+  --info-bg: #e4ecff;
+  --idle: #4b5563;
+  --idle-bg: #e9ecf1;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1218;
+    --surface: #171b23;
+    --surface-2: #1e232d;
+    --border: #2b3240;
+    --text: #e8ebf1;
+    --muted: #9aa3b2;
+    --accent: #6f97ff;
+    --accent-text: #0b1020;
+    --ok: #62d394;
+    --ok-bg: #12301f;
+    --warn: #f0c060;
+    --warn-bg: #3a2c0c;
+    --bad: #ff8f86;
+    --bad-bg: #3d1614;
+    --info: #9bb8ff;
+    --info-bg: #16264d;
+    --idle: #b3bccb;
+    --idle-bg: #262c38;
+    --shadow: none;
+  }
+}
+:root {
+  /* Khoảng cách */
+  --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
+  /* Cỡ chữ */
+  --text-sm: .86rem; --text-base: 1rem; --text-lg: 1.05rem; --text-xl: 1.45rem;
+  --radius-sm: 8px;
+  --shadow-pop: 0 10px 30px rgba(16, 24, 40, .25);
+  /* Chuyển động. fast: phản hồi thao tác (hover, nhấn). base: mở / đóng, trạng thái đổi.
+     slow: chuyển cảnh. flow: minh hoạ luồng của một lần chạy (được phép dài hơn). */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 280ms;
+  --dur-flow: 900ms;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+  /* Vệt đánh dấu một dòng vừa xuất hiện: đủ lâu để mắt bắt kịp, rồi tự tắt. */
+  --dur-mark: 2400ms;
+}
+/* Người dùng xin giảm chuyển động: mọi hiệu ứng thành đổi trạng thái tức thì. Hook đếm số
+   (lib/use-tween.ts) và sơ đồ luồng đọc cùng cài đặt này. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 1ms; --dur-base: 1ms; --dur-slow: 1ms; --dur-flow: 1ms; --dur-mark: 1ms; }
+}

@@ -16,8 +16,22 @@ export function Badge({ tone, children }: { tone?: string; children: ReactNode }
   return <span className={'badge ' + (tone ?? '')}>{children}</span>;
 }
 
+// Trạng thái phân biệt được bằng HÌNH, không chỉ bằng màu: dấu tích (xong), dấu chéo (lỗi),
+// hai vạch (đang chờ người hoặc tạm dừng), vòng (đang chạy; quay khi `busy`), chấm (còn lại).
+export function StatusIcon({ tone, busy }: { tone?: string; busy?: boolean }) {
+  const common = { className: 'status-icon' + (busy ? ' spin' : ''), viewBox: '0 0 16 16', 'aria-hidden': true, fill: 'none', stroke: 'currentColor', strokeWidth: 2.2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  if (tone === 'ok') return <svg {...common}><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>;
+  if (tone === 'bad') return <svg {...common}><path d="M4 4l8 8M12 4l-8 8" /></svg>;
+  if (tone === 'warn') return <svg {...common}><path d="M5.5 3.5v9M10.5 3.5v9" /></svg>;
+  if (tone === 'info') return <svg {...common}><path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" /></svg>;
+  return <svg {...common}><circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none" /></svg>;
+}
+
+const BUSY: ReadonlySet<string> = new Set(['running', 'started']);
+
 export function StatusBadge({ status }: { status: string | null | undefined }) {
-  return <Badge tone={status ? TONE[status] : undefined}>{status ? tOr('st_' + status, status) : t('unknown')}</Badge>;
+  const tone = status ? TONE[status] : undefined;
+  return <Badge tone={tone}><StatusIcon tone={tone} busy={!!status && BUSY.has(status)} />{status ? tOr('st_' + status, status) : t('unknown')}</Badge>;
 }
 
 const RISK_TONE: Record<string, string> = { read: 'ok', write: 'warn', destructive: 'bad', financial: 'bad' };
@@ -30,8 +44,20 @@ export function Spinner() {
   return <div className="spinner" role="status" aria-label={t('loading')} />;
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <div className="empty">{children}</div>;
+// Empty: trạng thái rỗng. Ngoài câu "chưa có gì", nó nói bước tiếp theo (`hint`) và đưa luôn
+// nút làm bước đó (`action`) khi giao diện làm được.
+export function Empty({ children, hint, action }: { children: ReactNode; hint?: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="empty">
+      <svg viewBox="0 0 56 56" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="13" width="38" height="30" rx="5" />
+        <path d="M9 22h38M18 31h20M18 36h12" />
+      </svg>
+      <div>{children}</div>
+      {hint ? <div className="hint">{hint}</div> : null}
+      {action ? <div className="row">{action}</div> : null}
+    </div>
+  );
 }
 
 export type NoticeKind = 'ok' | 'warn' | 'bad';

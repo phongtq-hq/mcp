@@ -6,6 +6,7 @@ import { App } from '@/app/app';
 import * as auth from '@/auth/oidc';
 import { Notice, Spinner } from '@/components/ui';
 import { t } from '@/i18n';
+import '@/styles/tokens.css';
 import '@/styles/app.css';
 
 async function start(): Promise<void> {

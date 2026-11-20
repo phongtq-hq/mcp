@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { t } from '@/i18n';
+import { useNewKeys } from '@/lib/use-new-keys';
 import { Empty } from './ui';
 
 export interface Column<T> {
@@ -15,11 +16,17 @@ interface Props<T> {
   // onRow: cả dòng bấm được (chuột và phím Enter).
   onRow?: (row: T) => void;
   emptyText?: string;
+  // Trạng thái rỗng: bước tiếp theo và nút làm bước đó.
+  emptyHint?: ReactNode;
+  emptyAction?: ReactNode;
 }
 
-export function DataTable<T>({ columns, rows, rowKey, onRow, emptyText }: Props<T>) {
+export function DataTable<T>({ columns, rows, rowKey, onRow, emptyText, emptyHint, emptyAction }: Props<T>) {
+  // Dòng xuất hiện sau lượt hiện đầu tiên (tự làm mới, "tải thêm") được đánh dấu vài giây,
+  // để người dùng thấy cái gì vừa thay đổi.
+  const fresh = useNewKeys((rows ?? []).map(rowKey));
   if (!rows || rows.length === 0) {
-    return <div className="table-wrap"><Empty>{emptyText || t('noData')}</Empty></div>;
+    return <div className="table-wrap"><Empty hint={emptyHint} action={emptyAction}>{emptyText || t('noData')}</Empty></div>;
   }
   return (
     <div className="table-wrap">
@@ -31,7 +38,7 @@ export function DataTable<T>({ columns, rows, rowKey, onRow, emptyText }: Props<
           {rows.map(r => (
             <tr
               key={rowKey(r)}
-              className={onRow ? 'link' : undefined}
+              className={[onRow ? 'link' : '', fresh.has(rowKey(r)) ? 'row-new' : ''].filter(Boolean).join(' ') || undefined}
               tabIndex={onRow ? 0 : undefined}
               onClick={onRow ? () => onRow(r) : undefined}
               onKeyDown={onRow ? e => { if (e.key === 'Enter' && e.target === e.currentTarget) onRow(r); } : undefined}

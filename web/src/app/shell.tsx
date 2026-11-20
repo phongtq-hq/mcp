@@ -88,7 +88,13 @@ export function Shell() {
         </div>
       </aside>
       {/* Vùng chờ nằm TRONG khung trang: nạp một màn hình chưa tải không làm mất điều hướng. */}
-      <main className="main" id="main" tabIndex={-1}><Suspense fallback={<Spinner />}><Outlet /></Suspense></main>
+      <main className="main" id="main" tabIndex={-1}>
+        {/* key = mục điều hướng: sang mục khác thì nội dung hiện lên nhẹ; đổi tab trong cùng một
+            mục thì không. Trang chi tiết phê duyệt (nơi ra quyết định) không có chuyển động nào. */}
+        <div key={section} className={location.pathname.startsWith('/approvals/') ? 'no-motion' : 'page-enter'}>
+          <Suspense fallback={<Spinner />}><Outlet /></Suspense>
+        </div>
+      </main>
       <AssistantBubble />
     </div>
   );
