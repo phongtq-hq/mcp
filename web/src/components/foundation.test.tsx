@@ -1,9 +1,9 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DataTable } from '@/components/data-table';
-import { Skeleton } from '@/components/skeleton';
-import { StatusBadge } from '@/components/ui';
-import { durationMs, reducedMotion } from './motion';
+import { DataTable } from './data-table';
+import { Skeleton } from './skeleton';
+import { StatusBadge } from './ui';
+import { durationMs, reducedMotion } from '@/lib/motion';
 
 afterEach(cleanup);
 const table = (ids: string[]) => <DataTable rows={ids.map(id => ({ id }))} rowKey={r => r.id} columns={[{ label: 'ID', cell: r => r.id }]} />;
@@ -31,7 +31,7 @@ describe('dòng mới của bảng', () => {
 describe('trạng thái và khung chờ', () => {
   it('huy hiệu trạng thái có hình riêng theo loại, không chỉ khác màu', () => {
     render(<><StatusBadge status="completed" /><StatusBadge status="failed" /><StatusBadge status="running" /><StatusBadge status="waiting_approval" /></>);
-    const shapes = [...document.querySelectorAll('.badge svg')].map(svg => svg.innerHTML);
+    const shapes = [...document.querySelectorAll('.badge svg')].map(svg => svg.firstElementChild?.getAttribute('d') ?? svg.firstElementChild?.tagName);
     expect(new Set(shapes).size).toBe(4);
     expect(document.querySelectorAll('.status-icon.spin')).toHaveLength(1);
     expect(screen.getByText('Hoàn thành')).toBeTruthy();
