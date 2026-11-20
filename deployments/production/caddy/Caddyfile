@@ -28,10 +28,11 @@
 	encode zstd gzip
 }
 
-# Management API và giao diện web (/ui/). CSP của giao diện do process api tự đặt.
+# Management API và giao diện web (ở gốc: /, /config.json, /assets/*). CSP của giao diện do
+# process api tự đặt.
 {$HQ_APP_DOMAIN} {
 	import hardening
-	@public path / /ui /ui/* /v1/*
+	@public path / /config.json /assets/* /v1/*
 	handle @public {
 		# Luồng SSE (/v1/executions/{id}/events) được Caddy đẩy ngay theo Content-Type.
 		reverse_proxy api:8080

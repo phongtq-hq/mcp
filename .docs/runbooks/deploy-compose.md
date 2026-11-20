@@ -87,7 +87,7 @@ Một lệnh làm cả lần đầu lẫn các lần sau: kéo image, chạy `mi
      -admin-issuer https://<HQ_AUTH_DOMAIN>/realms/hq -admin-subject <sub> -admin-email <email>
    ```
 
-   Lệnh in `id` của organization. Đăng nhập thử ở `https://<HQ_APP_DOMAIN>/ui/`.
+   Lệnh in `id` của organization. Đăng nhập thử ở `https://<HQ_APP_DOMAIN>/`.
 3. **Integration Docker** (nếu dùng): đặt `HQ_DOCKER_ORG_ID=<id organization>` và thêm `integration-docker` vào `COMPOSE_PROFILES`, `hqctl deploy <tag đang chạy>`, rồi:
 
    ```sh

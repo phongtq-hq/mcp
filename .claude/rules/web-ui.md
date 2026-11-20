@@ -8,7 +8,7 @@ paths:
 
 Nguồn: [ADR-0016](../../.docs/adr/0016-react-web-console-with-build-step.md) · `.docs/architecture/security.md` §4.1 (đoạn "Giao diện web") · `web/eslint.config.js` (luật được máy kiểm).
 
-Giao diện là **một client của Management API**: file tĩnh do `api` phục vụ ở `/ui/`, không có credential, quyền hay endpoint riêng. Thứ gì cần dữ liệu mới thì thêm vào `/v1` trước (`/add-endpoint`), không thêm đường tắt cho giao diện.
+Giao diện là **một client của Management API**: file tĩnh do `api` phục vụ ở gốc của origin (`/`, `/config.json`, `/assets/*`), không có credential, quyền hay endpoint riêng. Thứ gì cần dữ liệu mới thì thêm vào `/v1` trước (`/add-endpoint`), không thêm đường tắt cho giao diện.
 
 ## Tầng và phụ thuộc (`web/src`)
 
@@ -60,7 +60,7 @@ Mọi thứ đến từ API có thể do model hoặc hệ thống ngoài sinh r
 
 ## CSP và phụ thuộc
 
-- CSP của `/ui/` không đổi (`default-src 'none'`, không inline, không `eval`, không CDN). `style={{…}}` chỉ cho giá trị tính lúc chạy (ví dụ độ rộng một thanh phần trăm; React đặt nó qua CSSOM nên CSP cho phép), còn lại dùng class trong `styles/app.css`; không thẻ `<style>` / `<script>` nội tuyến; không nhúng asset thành `data:` URI vào JS / CSS. Thư viện cần nới CSP thì không dùng.
+- CSP của giao diện không đổi (`default-src 'none'`, không inline, không `eval`, không CDN). `style={{…}}` chỉ cho giá trị tính lúc chạy (ví dụ độ rộng một thanh phần trăm; React đặt nó qua CSSOM nên CSP cho phép), còn lại dùng class trong `styles/app.css`; không thẻ `<style>` / `<script>` nội tuyến; không nhúng asset thành `data:` URI vào JS / CSS. Thư viện cần nới CSP thì không dùng.
 - Thêm phụ thuộc lúc chạy (thứ vào bundle) là thay đổi phải nêu rõ: dùng `/add-ui-dependency`. Phiên bản ghim chính xác, cài bằng `npm ci --ignore-scripts`.
 - Bản build (`internal/webui/dist`) không vào repo.
 

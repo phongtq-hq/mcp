@@ -32,11 +32,19 @@ func get(t *testing.T, srv *httptest.Server, path string) (page, string) {
 	return page{StatusCode: res.StatusCode, Header: res.Header, Path: res.Request.URL.Path}, string(b)
 }
 
+// serve gắn handler vào mux đúng như process api làm (Mount), để test thấy cả phần định
+// tuyến: giao diện chỉ chiếm /, /config.json và /assets/.
+func serve(h http.Handler) *httptest.Server {
+	mux := http.NewServeMux()
+	mount(mux, h)
+	return httptest.NewServer(mux)
+}
+
 // builtFS có hình dạng của một bản build Vite: index.html ở gốc, mọi thứ khác trong assets/.
 func builtFS() fstest.MapFS {
 	return fstest.MapFS{
 		".gitkeep":                {Data: []byte("")},
-		"index.html":              {Data: []byte(`<!doctype html><script type="module" src="/ui/assets/index-abc.js"></script>`)},
+		"index.html":              {Data: []byte(`<!doctype html><script type="module" src="/assets/index-abc.js"></script>`)},
 		"assets/index-abc.js":     {Data: []byte("console.log(1)")},
 		"assets/index-abc.css":    {Data: []byte("body{}")},
 		"assets/.hidden-chunk.js": {Data: []byte("x")},
@@ -45,11 +53,11 @@ func builtFS() fstest.MapFS {
 
 func TestHandler(t *testing.T) {
 	cfg := Config{Issuer: "https://idp.example.test/realms/hq/", ClientID: "hq-web"}
-	srv := httptest.NewServer(newHandler(cfg, builtFS()))
+	srv := serve(newHandler(cfg, builtFS()))
 	defer srv.Close()
 
 	// Mọi file của giao diện có mặt và mang header bảo mật.
-	for _, path := range []string{"/ui/", "/ui/assets/index-abc.js", "/ui/assets/index-abc.css"} {
+	for _, path := range []string{"/", "/assets/index-abc.js", "/assets/index-abc.css"} {
 		res, body := get(t, srv, path)
 		if res.StatusCode != http.StatusOK || body == "" {
 			t.Fatalf("%s: status %d, %d byte", path, res.StatusCode, len(body))
@@ -69,18 +77,18 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Chỉ file mang hash trong tên (assets/) được giữ lâu; index.html luôn được hỏi lại.
-	if res, _ := get(t, srv, "/ui/"); res.Header.Get("Cache-Control") != "no-cache" {
+	if res, _ := get(t, srv, "/"); res.Header.Get("Cache-Control") != "no-cache" {
 		t.Errorf("index.html: Cache-Control = %q", res.Header.Get("Cache-Control"))
 	}
-	if res, _ := get(t, srv, "/ui/assets/index-abc.js"); !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
+	if res, _ := get(t, srv, "/assets/index-abc.js"); !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
 		t.Errorf("asset: Cache-Control = %q", res.Header.Get("Cache-Control"))
 	}
-	if res, _ := get(t, srv, "/ui/assets/khong-co.js"); res.StatusCode != http.StatusNotFound || strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
+	if res, _ := get(t, srv, "/assets/khong-co.js"); res.StatusCode != http.StatusNotFound || strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
 		t.Errorf("asset không tồn tại: %d, Cache-Control = %q", res.StatusCode, res.Header.Get("Cache-Control"))
 	}
 
 	// Cấu hình công khai: đúng ba trường, không có gì khác.
-	res, body := get(t, srv, "/ui/config.json")
+	res, body := get(t, srv, "/config.json")
 	var public map[string]string
 	if err := json.Unmarshal([]byte(body), &public); err != nil || res.Header.Get("Content-Type") != "application/json; charset=utf-8" {
 		t.Fatalf("config.json: %v %s", err, body)
@@ -93,34 +101,42 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Chỉ đọc.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/ui/", nil)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/", nil)
 	post, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = post.Body.Close()
 	if post.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST /ui/: %d", post.StatusCode)
+		t.Errorf("POST /: %d", post.StatusCode)
+	}
+
+	// Giao diện không bắt mọi đường: đường lạ (kể cả tiền tố cũ /ui/ và đường gõ sai cạnh
+	// /v1) nhận 404 của mux, không nhận index.html.
+	for _, path := range []string{"/ui/", "/v1x", "/projects", "/index.html", "/config.json/x"} {
+		if res, body := get(t, srv, path); res.StatusCode != http.StatusNotFound || strings.Contains(body, "<script") {
+			t.Errorf("%s: status %d, muốn 404", path, res.StatusCode)
+		}
 	}
 
 	// Không lộ file ẩn, không liệt kê thư mục, không ra ngoài thư mục nhúng.
 	for _, path := range []string{
-		"/ui/.gitkeep", "/ui/assets/.hidden-chunk.js", "/ui/assets/",
-		"/ui/../webui.go", "/ui/%2e%2e/webui.go", "/ui/webui.go", "/ui/dist/index.html",
+		"/.gitkeep", "/assets/.hidden-chunk.js", "/assets/",
+		"/assets/../webui.go", "/assets/%2e%2e/webui.go", "/webui.go", "/dist/index.html",
 	} {
-		if res, _ := get(t, srv, path); res.StatusCode == http.StatusOK && !strings.HasSuffix(res.Path, "/ui/") {
+		if res, _ := get(t, srv, path); res.StatusCode == http.StatusOK && res.Path != "/" {
 			t.Errorf("%s trả 200", path)
 		}
 	}
 }
 
-// Binary build khi chưa có bản build của giao diện: /ui/ nói rõ điều đó thay vì trả trang
+// Binary build khi chưa có bản build của giao diện: / nói rõ điều đó thay vì trả trang
 // trắng; config.json vẫn có (nó không phụ thuộc bản build).
 func TestHandlerNotBuilt(t *testing.T) {
-	srv := httptest.NewServer(newHandler(Config{Issuer: "https://idp.example.test/realms/hq", ClientID: "hq-web"},
+	srv := serve(newHandler(Config{Issuer: "https://idp.example.test/realms/hq", ClientID: "hq-web"},
 		fstest.MapFS{".gitkeep": {Data: []byte("")}}))
 	defer srv.Close()
-	for _, path := range []string{"/ui/", "/ui/assets/index-abc.js"} {
+	for _, path := range []string{"/", "/assets/index-abc.js"} {
 		res, body := get(t, srv, path)
 		if res.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "make ui-build") {
 			t.Errorf("%s: %d %q", path, res.StatusCode, body)
@@ -129,10 +145,10 @@ func TestHandlerNotBuilt(t *testing.T) {
 			t.Errorf("%s: thiếu CSP", path)
 		}
 	}
-	if res, _ := get(t, srv, "/ui/config.json"); res.StatusCode != http.StatusOK {
+	if res, _ := get(t, srv, "/config.json"); res.StatusCode != http.StatusOK {
 		t.Errorf("config.json: %d", res.StatusCode)
 	}
-	if res, _ := get(t, srv, "/ui/.gitkeep"); res.StatusCode != http.StatusNotFound {
+	if res, _ := get(t, srv, "/.gitkeep"); res.StatusCode != http.StatusNotFound {
 		t.Errorf(".gitkeep: %d", res.StatusCode)
 	}
 }
@@ -157,12 +173,12 @@ func TestBuiltIndexHasNoInlineCode(t *testing.T) {
 	index := string(raw)
 
 	// Handler thật trên file nhúng thật: trang và mọi file nó tham chiếu được phục vụ kèm CSP.
-	srv := httptest.NewServer(Handler(Config{Issuer: "https://idp.example.test/realms/hq", ClientID: "hq-web"}))
+	srv := serve(Handler(Config{Issuer: "https://idp.example.test/realms/hq", ClientID: "hq-web"}))
 	defer srv.Close()
-	if res, body := get(t, srv, "/ui/"); res.StatusCode != http.StatusOK || body != index || res.Header.Get("Content-Security-Policy") == "" {
-		t.Fatalf("Handler() /ui/: status %d, thân khớp index.html: %v", res.StatusCode, body == index)
+	if res, body := get(t, srv, "/"); res.StatusCode != http.StatusOK || body != index || res.Header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("Handler() /: status %d, thân khớp index.html: %v", res.StatusCode, body == index)
 	}
-	for _, ref := range regexp.MustCompile(`(?:src|href)="(/ui/[^"]+)"`).FindAllStringSubmatch(index, -1) {
+	for _, ref := range regexp.MustCompile(`(?:src|href)="(/[^"]+)"`).FindAllStringSubmatch(index, -1) {
 		if res, body := get(t, srv, ref[1]); res.StatusCode != http.StatusOK || body == "" || res.Header.Get("Content-Security-Policy") == "" {
 			t.Errorf("Handler() %s: status %d, %d byte", ref[1], res.StatusCode, len(body))
 		}
@@ -175,12 +191,12 @@ func TestBuiltIndexHasNoInlineCode(t *testing.T) {
 		t.Fatalf("index.html không nạp script nào")
 	}
 	for _, m := range scripts {
-		if !strings.Contains(m[1], `src="/ui/assets/`) || strings.TrimSpace(m[2]) != "" {
+		if !strings.Contains(m[1], `src="/assets/`) || strings.TrimSpace(m[2]) != "" {
 			t.Errorf("script không phải file của chính origin: %s", m[0])
 		}
 	}
 	for _, ref := range regexp.MustCompile(`(?:src|href)="([^"]+)"`).FindAllStringSubmatch(index, -1) {
-		if !strings.HasPrefix(ref[1], "/ui/") && !strings.HasPrefix(ref[1], "data:image/svg+xml,") {
+		if !strings.HasPrefix(ref[1], "/assets/") && !strings.HasPrefix(ref[1], "data:image/svg+xml,") {
 			t.Errorf("index.html tham chiếu ngoài origin: %s", ref[1])
 		}
 	}

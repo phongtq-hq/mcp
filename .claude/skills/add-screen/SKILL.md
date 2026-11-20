@@ -65,7 +65,7 @@ make generate-check          # nếu có đổi openapi.yaml
 go test ./internal/webui/    # kiểm bản build (không script / style nội tuyến) và quét web/src
 ```
 
-Xem màn hình thật: `make run-api` + `make ui-dev` (http://localhost:5173/ui/), hoặc cụm đang chạy. Chưa có test đầu-cuối trong trình duyệt: nói rõ phần nào bạn đã tự bấm thử và phần nào chỉ có test đơn vị.
+Xem màn hình thật: `make run-api` + `make ui-dev` (http://localhost:5173/), hoặc cụm đang chạy. Chưa có test đầu-cuối trong trình duyệt: nói rõ phần nào bạn đã tự bấm thử và phần nào chỉ có test đơn vị.
 
 Rồi:
 

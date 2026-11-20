@@ -193,7 +193,7 @@ internal/
   agent/         catalog/ runtime/ (runtime/durable: vòng lặp trên Temporal) orchestrator/ memory/
   mcp/           gateway/ registry/ transport/ client/
   workflow/      definitions/ (definitions/schedule: lịch chạy trên Temporal Schedules) approval/ notify/ (webhook thông báo: cấu hình ở api, bộ gửi ở gateway)
-  webui/         phục vụ giao diện web ở /ui/ (bởi api) từ bản build nhúng bằng go:embed (dist/); không có quyền riêng
+  webui/         phục vụ giao diện web ở / (bởi api) từ bản build nhúng bằng go:embed (dist/); không có quyền riêng
   ai/            provider/ modelcatalog/ router/ prompt/
   cost/          ledger/ pricing/ budget/ reconcile/
   integration/   <mỗi MCP server managed một thư mục>

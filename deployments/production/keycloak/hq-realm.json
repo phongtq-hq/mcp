@@ -30,14 +30,14 @@
       "implicitFlowEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "${HQ_APP_ORIGIN}/ui/"
+        "${HQ_APP_ORIGIN}/"
       ],
       "webOrigins": [
         "${HQ_APP_ORIGIN}"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "${HQ_APP_ORIGIN}/ui/"
+        "post.logout.redirect.uris": "${HQ_APP_ORIGIN}/"
       },
       "protocolMappers": [
         {

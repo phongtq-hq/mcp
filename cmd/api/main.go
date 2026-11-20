@@ -129,8 +129,7 @@ func routes(ctx context.Context, mux *http.ServeMux, deps process.Deps) error {
 		if client == "" {
 			client = "hq-web"
 		}
-		mux.Handle("/ui/", webui.Handler(webui.Config{Issuer: os.Getenv("HQ_OIDC_ISSUER"), ClientID: client}))
-		mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusFound))
+		webui.Mount(mux, webui.Config{Issuer: os.Getenv("HQ_OIDC_ISSUER"), ClientID: client})
 	}
 	return nil
 }

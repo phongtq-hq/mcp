@@ -211,7 +211,7 @@ services:
       HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY}
       HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY}
       HQ_SECRETS_PUBLIC_KEY: ${HQ_SECRETS_PUBLIC_KEY:-}
-      # Giao diện web ở https://<HQ_APP_DOMAIN>/ui/. Ngoài local phải bật tường minh.
+      # Giao diện web ở https://<HQ_APP_DOMAIN>/. Ngoài local phải bật tường minh.
       HQ_UI_ENABLED: ${HQ_UI_ENABLED:-1}
       HQ_UI_OIDC_CLIENT_ID: ${HQ_UI_OIDC_CLIENT_ID:-hq-web}
     volumes:

@@ -18,7 +18,7 @@ ADR-0016 quyết định 3 và 7: **thư viện bị giới hạn bởi CSP, kh�
 
 ## 2. Chạy được dưới CSP không
 
-CSP của `/ui/` (đọc bản thật ở `internal/webui/webui.go`): `default-src 'none'`, script / style chỉ từ chính origin, không `unsafe-inline`, không `unsafe-eval`, không CDN. Kiểm trong tài liệu và mã nguồn của gói (tra cứu, không dựa trí nhớ):
+CSP của giao diện (đọc bản thật ở `internal/webui/webui.go`): `default-src 'none'`, script / style chỉ từ chính origin, không `unsafe-inline`, không `unsafe-eval`, không CDN. Kiểm trong tài liệu và mã nguồn của gói (tra cứu, không dựa trí nhớ):
 
 - Có chèn thẻ `<style>` lúc chạy (CSS-in-JS) hoặc cần `style-src 'unsafe-inline'` không?
 - Có `eval` / `new Function` / dựng code từ chuỗi không (một số thư viện biểu đồ, template, validate schema)?

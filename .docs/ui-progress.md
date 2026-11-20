@@ -6,7 +6,7 @@ Liên quan: [ADR-0016](adr/0016-react-web-console-with-build-step.md) (giao di�
 
 ## 1. Mục tiêu
 
-Một quản trị viên làm được mọi việc mà Management API (`/v1`) cho phép ngay trên giao diện (`/ui/`), không cần `curl` hay `hqadmin`. Việc được chia thành 11 lát; mỗi lát xong hẳn (code, test, review, commit) rồi mới sang lát sau.
+Một quản trị viên làm được mọi việc mà Management API (`/v1`) cho phép ngay trên giao diện (`/`), không cần `curl` hay `hqadmin`. Việc được chia thành 11 lát; mỗi lát xong hẳn (code, test, review, commit) rồi mới sang lát sau.
 
 Thước đo: số operation của `openapi.yaml` có màn hình dùng tới. Hiện **35 / 81** (lúc bắt đầu: 21 / 81). Con số lấy từ một script đối chiếu đường dẫn trong `web/src` với spec, có rà tay hai chỗ script đếm nhầm.
 

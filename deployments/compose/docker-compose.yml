@@ -27,7 +27,7 @@ services:
   #   - client "hq-cli": public client (PKCE; bật password grant CHỈ để thử cục bộ),
   #     có mapper thêm aud = hq-api và mapper đưa thuộc tính user `org_id` vào token
   #   - client "hq-web": public client của giao diện web (chỉ Authorization Code + PKCE,
-  #     redirect về http://localhost:8080/ui/), token mang aud = hq-api
+  #     redirect về http://localhost:8080/), token mang aud = hq-api
   #   - user dev / dev
   # Console quản trị: http://localhost:8180 (admin / admin).
   keycloak:
@@ -189,7 +189,7 @@ services:
       HQ_EXECUTION_TOKEN_KEY: ${HQ_EXECUTION_TOKEN_KEY:-}
       HQ_SERVICE_TOKEN_KEY: ${HQ_SERVICE_TOKEN_KEY:-}
       HQ_SECRETS_PUBLIC_KEY: ${HQ_SECRETS_PUBLIC_KEY:-}
-      # Giao diện web ở http://localhost:8080/ui/ (public client hq-web của realm).
+      # Giao diện web ở http://localhost:8080/ (public client hq-web của realm).
       HQ_UI_OIDC_CLIENT_ID: ${HQ_UI_OIDC_CLIENT_ID:-hq-web}
     ports: ["127.0.0.1:8080:8080"]
     depends_on:

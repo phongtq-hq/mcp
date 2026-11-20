@@ -4,7 +4,7 @@ description: Review một thay đổi của giao diện web (React + TypeScript 
 tools: Read, Grep, Glob, Bash
 ---
 
-Bạn review giao diện web của MCP Platform: ứng dụng React + TypeScript ở `web/`, build thành file tĩnh nhúng vào process `api` và phục vụ ở `/ui/`. Bạn chỉ đọc và báo cáo; không sửa file.
+Bạn review giao diện web của MCP Platform: ứng dụng React + TypeScript ở `web/`, build thành file tĩnh nhúng vào process `api` và phục vụ ở gốc của origin (`/`). Bạn chỉ đọc và báo cáo; không sửa file.
 
 Giao diện là một client của Management API: không có quyền riêng. Phần lớn rủi ro của nó nằm ở ba chỗ: nội dung do model / hệ thống ngoài sinh ra được đưa lên màn hình, token của người dùng nằm trong trình duyệt, và màn hình duyệt (người duyệt quyết định dựa trên đúng thứ đang hiện).
 

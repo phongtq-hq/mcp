@@ -1,5 +1,7 @@
-// Package webui phục vụ giao diện web của platform ở /ui/: một ứng dụng React (mã nguồn ở
-// web/, ADR-0016) được build thành file tĩnh vào thư mục dist và nhúng vào binary `api`.
+// Package webui phục vụ giao diện web của platform ở gốc của origin (/): một ứng dụng React
+// (mã nguồn ở web/, ADR-0016) được build thành file tĩnh vào thư mục dist và nhúng vào
+// binary `api`. Nó chỉ chiếm đúng ba đường: /, /config.json và /assets/ (xem Mount); mọi
+// đường khác của origin (/v1, /readyz…) không đi qua package này.
 //
 // Giao diện không có quyền gì của riêng nó. Trình duyệt đăng nhập với IdP bằng
 // Authorization Code + PKCE (public client), rồi gọi Management API (/v1) bằng access
@@ -7,7 +9,7 @@
 // chỉ trả file tĩnh và một file cấu hình công khai (địa chỉ IdP, client id).
 //
 // dist/ không nằm trong mã nguồn (chỉ có .gitkeep): `make ui-build` tạo nó. Binary build
-// khi chưa có bản build vẫn chạy; /ui/ khi đó trả 503 kèm chỉ dẫn.
+// khi chưa có bản build vẫn chạy; / khi đó trả 503 kèm chỉ dẫn.
 package webui
 
 import (
@@ -34,7 +36,18 @@ type Config struct {
 	ClientID string
 }
 
-// Handler trả về handler cho tiền tố /ui/.
+// Mount đăng ký giao diện trên mux. Giao diện dùng định tuyến theo fragment (#/…) nên chỉ
+// cần trang gốc, file cấu hình và thư mục assets; không đăng ký "/" bắt mọi đường, để một
+// đường lạ (kể cả gõ sai dưới /v1) vẫn nhận 404 chứ không nhận index.html.
+func Mount(mux *http.ServeMux, cfg Config) { mount(mux, Handler(cfg)) }
+
+func mount(mux *http.ServeMux, h http.Handler) {
+	for _, pattern := range []string{"/{$}", "/config.json", "/assets/"} {
+		mux.Handle(pattern, h)
+	}
+}
+
+// Handler trả về handler phục vụ bản build ở gốc (/). Dùng Mount để gắn nó vào mux.
 func Handler(cfg Config) http.Handler {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {
@@ -46,14 +59,14 @@ func Handler(cfg Config) http.Handler {
 const notBuilt = "Giao diện chưa được build. Chạy `make ui-build` rồi build lại binary api.\n" +
 	"The web console has not been built. Run `make ui-build`, then rebuild the api binary.\n"
 
-// newHandler phục vụ files (gốc của bản build: index.html, assets/…) ở /ui/.
+// newHandler phục vụ files (gốc của bản build: index.html, assets/…) ở /.
 func newHandler(cfg Config, files fs.FS) http.Handler {
 	public, _ := json.Marshal(map[string]string{
 		"issuer": strings.TrimRight(cfg.Issuer, "/"), "client_id": cfg.ClientID, "api_base": "/v1"})
 	csp := contentSecurityPolicy(cfg.Issuer)
 	_, statErr := fs.Stat(files, "index.html")
 	built := statErr == nil
-	server := http.StripPrefix("/ui/", http.FileServerFS(files))
+	server := http.FileServerFS(files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -67,12 +80,12 @@ func newHandler(cfg Config, files fs.FS) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		// Mặc định: luôn hỏi lại, không giữ bản cũ (index.html đổi theo bản phát hành của api).
 		h.Set("Cache-Control", "no-cache")
-		if r.URL.Path == "/ui/config.json" {
+		if r.URL.Path == "/config.json" {
 			h.Set("Content-Type", "application/json; charset=utf-8")
 			_, _ = w.Write(public)
 			return
 		}
-		name := strings.TrimPrefix(r.URL.Path, "/ui/")
+		name := strings.TrimPrefix(r.URL.Path, "/")
 		// Không phục vụ file ẩn (.gitkeep) và không liệt kê thư mục.
 		if hidden(name) || (name != "" && strings.HasSuffix(name, "/")) {
 			http.NotFound(w, r)

@@ -58,7 +58,7 @@ function randomString(n: number): string {
   return b64url(a);
 }
 
-function redirectURI(): string { return location.origin + '/ui/'; }
+function redirectURI(): string { return location.origin + '/'; }
 
 function need<T>(value: T | null, what: string): T {
   if (value === null) throw new Error('auth: ' + what + ' chưa được nạp');

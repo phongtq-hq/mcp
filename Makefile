@@ -21,7 +21,7 @@ ui-install: $(UI_DEPS) ## Cài phụ thuộc của giao diện đúng theo packa
 
 ui-build: $(UI_DIST) ## Build giao diện vào internal/webui/dist (chỉ chạy lại khi mã nguồn đổi)
 
-ui-dev: $(UI_DEPS) ## Giao diện ở http://localhost:5173/ui/ có tải lại nóng; API lấy từ `make run-api`
+ui-dev: $(UI_DEPS) ## Giao diện ở http://localhost:5173/ có tải lại nóng; API lấy từ `make run-api`
 	cd web && npm run dev
 
 ui-lint: $(UI_DEPS) ## Kiểm kiểu TypeScript + ESLint (luật phụ thuộc giữa feature, cấm HTML thô)
@@ -35,7 +35,7 @@ build: ui-build build-go ## Build giao diện rồi mọi binary vào ./bin
 # Chỉ binary Go, không chạm tới Node. Các process không phục vụ giao diện (gateway, worker,
 # MCP server) chạy bằng target này: máy của chúng không cần Node, và công cụ build của
 # giao diện (mã bên thứ ba) không chạy cạnh khoá của gateway. Binary api build kiểu này khi
-# chưa có bản build của giao diện sẽ trả 503 ở /ui/.
+# chưa có bản build của giao diện sẽ trả 503 ở /.
 build-go: ## Build mọi binary vào ./bin, không build giao diện
 	go build -o bin/ ./cmd/...
 
