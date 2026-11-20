@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,6 +104,70 @@ func TestKeySetRejectsUnsignedAndSymmetric(t *testing.T) {
 	} {
 		if _, err := ks.VerifySignature(context.Background(), tok); err == nil || errors.Is(err, errKeysUnavailable) {
 			t.Errorf("%s: err = %v, muốn bị từ chối vì token sai dạng", name, err)
+		}
+	}
+}
+
+// Process vừa khởi động, chưa có khoá nào: nhiều request hợp lệ tới cùng lúc đều phải qua,
+// và JWKS chỉ được tải một lần. (Trước đây request tới trong lúc request đầu đang tải bị từ
+// chối 401 "khoá lạ", và giao diện đăng xuất người dùng ngay sau khi đăng nhập.)
+func TestKeySetColdStartConcurrentRequests(t *testing.T) {
+	k1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		time.Sleep(100 * time.Millisecond) // IdP trả lời chậm: các request khác tới trong lúc này
+		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &k1.PublicKey, KeyID: "k1", Use: "sig"}}})
+	}))
+	defer srv.Close()
+
+	ks := newKeySet(srv.URL, srv.Client(), time.Hour)
+	token := signWith(t, k1, "k1")
+	const n = 16
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = ks.VerifySignature(context.Background(), token)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("request %d với token hợp lệ bị từ chối lúc khởi động nguội: %v", i, err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("JWKS được tải %d lần, muốn 1", got)
+	}
+}
+
+// IdP lỗi lúc khởi động nguội: request đang chờ nhận lỗi hạ tầng, không phải "token sai".
+func TestKeySetColdStartIdPDown(t *testing.T) {
+	k1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	ks := newKeySet(srv.URL, srv.Client(), time.Hour)
+	token := signWith(t, k1, "k1")
+	errs := make([]error, 8)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = ks.VerifySignature(context.Background(), token)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if !errors.Is(err, errKeysUnavailable) {
+			t.Errorf("request %d: muốn errKeysUnavailable, nhận %v", i, err)
 		}
 	}
 }

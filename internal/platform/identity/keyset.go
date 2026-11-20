@@ -43,7 +43,7 @@ type keySet struct {
 	keys      map[string]jose.JSONWebKey
 	lastFetch time.Time
 
-	fetching sync.Mutex // chỉ một lần tải tại một thời điểm; request khác không chờ
+	fetching sync.Mutex // chỉ một lần tải tại một thời điểm; request khác không chờ, trừ khi chưa có khoá nào
 }
 
 func newKeySet(url string, hc *http.Client, minRefresh time.Duration) *keySet {
@@ -80,10 +80,29 @@ func (k *keySet) lookup(kid string) (jose.JSONWebKey, bool) {
 	return key, ok
 }
 
+func (k *keySet) empty() bool {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return len(k.keys) == 0
+}
+
 // refresh tải lại JWKS nếu đã qua minRefresh kể từ lần thử trước. Trong khoảng
-// đó, hoặc khi một lần tải khác đang chạy, nó trả về ngay với cache hiện có.
+// đó, hoặc khi một lần tải khác đang chạy, nó trả về ngay với cache hiện có; riêng khi
+// cache còn rỗng (process vừa khởi động) thì chờ lần tải đang chạy.
 func (k *keySet) refresh(ctx context.Context) error {
 	if !k.fetching.TryLock() {
+		if !k.empty() {
+			return nil
+		}
+		// Khởi động nguội: chưa có khoá nào và một request khác đang tải JWKS. Trả về ngay
+		// ở đây sẽ từ chối một token HỢP LỆ là "khoá lạ" (401), và client đăng xuất người
+		// dùng vừa đăng nhập. Chờ đúng lần tải đang chạy (thời gian của nó có trần: timeout
+		// của HTTP client); không gọi thêm lần nào ra IdP, nên giới hạn của T10 không đổi.
+		k.fetching.Lock()
+		k.fetching.Unlock() //nolint:staticcheck // khoá chỉ dùng để chờ lần tải đang chạy xong
+		if k.empty() {
+			return errKeysUnavailable
+		}
 		return nil
 	}
 	defer k.fetching.Unlock()
