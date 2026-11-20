@@ -9,6 +9,16 @@ const client = vi.hoisted(() => ({
   soft: async <T,>(p: Promise<T>): Promise<T | null> => { try { return await p; } catch { return null; } },
 }));
 vi.mock('@/api/client', () => client);
+// Luồng sự kiện: test tự phát sự kiện qua `emit`; luồng đóng khi test gọi `finish`.
+const stream = vi.hoisted(() => ({ emit: null as null | (() => void), finish: null as null | ((end: string) => void), opened: 0 }));
+vi.mock('@/api/events', () => ({
+  streamExecutionEvents: (_id: string, onEvent: (e: unknown) => void, signal: AbortSignal) => new Promise<string>(resolve => {
+    stream.opened++;
+    stream.emit = () => onEvent({ event: 'step', data: null });
+    stream.finish = resolve;
+    signal.addEventListener('abort', () => resolve('closed'));
+  }),
+}));
 
 import { ApiError } from '@/lib/api-error';
 import ExecutionPage from './execution-page';
@@ -39,7 +49,7 @@ const show = (path: string) => render(
   </QueryClientProvider>,
 );
 
-beforeEach(() => { client.api.mockReset(); client.get.mockReset(); sessionStorage.clear(); });
+beforeEach(() => { client.api.mockReset(); client.get.mockReset(); sessionStorage.clear(); stream.opened = 0; stream.emit = null; stream.finish = null; });
 afterEach(cleanup);
 
 describe('Tab lần chạy', () => {
@@ -92,6 +102,9 @@ describe('Tab lần chạy', () => {
   });
 });
 
+// Tên tool hiện ở cả sơ đồ luồng lẫn danh sách bước: tìm trong danh sách bước.
+const inSteps = async (text: string) => within(await waitFor(() => { const el = document.querySelector<HTMLElement>('.steps'); if (!el) throw new Error('chưa có danh sách bước'); return el; })).getByText(text);
+
 describe('Chi tiết lần chạy', () => {
   function serve(content: () => Promise<unknown>) {
     client.get.mockImplementation(async (path: string) => {
@@ -109,8 +122,8 @@ describe('Chi tiết lần chạy', () => {
   it('nêu tên Agent, version và model ở đầu trang thay cho mã', async () => {
     serve(async () => page([]));
     show('/executions/' + X1);
-    expect(await screen.findByText('DevOps Agent')).toBeTruthy();
-    expect(screen.getByText('v3 · model-x')).toBeTruthy();
+    await screen.findByText('v3 · model-x');
+    expect([...document.querySelectorAll('.stat .value')].map(el => el.textContent)).toContain('DevOps Agent');
     expect(document.title).toContain('Lần chạy');
   });
 
@@ -120,7 +133,7 @@ describe('Chi tiết lần chạy', () => {
       step({ step_seq: 2, kind: 'tool_call', tool_name: 'docker.list_containers', request: '{"arguments":{"all":true}}', response: '<b>không phải HTML</b>' }),
     ]));
     show('/executions/' + X1);
-    await screen.findByText('docker.list_containers');
+    await inSteps('docker.list_containers');
     expect(client.get.mock.calls.some(c => c[0].includes('include_content'))).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Xem nội dung các bước' }));
     expect(await screen.findByText(/"all": true/)).toBeTruthy();
@@ -135,10 +148,10 @@ describe('Chi tiết lần chạy', () => {
   it('thiếu quyền đọc nội dung (403): báo thiếu quyền, các bước vẫn hiện', async () => {
     serve(async () => { throw new ApiError(403, { detail: 'thiếu execution:read_content' }); });
     show('/executions/' + X1);
-    await screen.findByText('docker.list_containers');
+    await inSteps('docker.list_containers');
     fireEvent.click(screen.getByRole('button', { name: 'Xem nội dung các bước' }));
     expect((await screen.findByRole('alert')).textContent).toContain('không có quyền');
-    expect(screen.getByText('docker.list_containers')).toBeTruthy();
+    expect(await inSteps('docker.list_containers')).toBeTruthy();
   });
 
   it('không tải được lần chạy: có nút thử lại và đường về danh sách dự án', async () => {
@@ -151,5 +164,52 @@ describe('Chi tiết lần chạy', () => {
     const calls = client.get.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Thử lại' }));
     await waitFor(() => expect(client.get.mock.calls.length).toBeGreaterThan(calls));
+  });
+});
+
+describe('Sơ đồ luồng của lần chạy', () => {
+  const node = (name: string) => screen.getByText(name).closest('.flow-node') as HTMLElement;
+
+  it('lần chạy đã xong: mỗi node nêu trạng thái bằng chữ, số lượt và thời gian từ các bước thật; không mở luồng sự kiện', async () => {
+    client.get.mockImplementation(async (path: string) => {
+      if (path === '/executions/' + X1) return execution();
+      if (path.startsWith(`/executions/${X1}/tasks`)) return page([task]);
+      if (path === '/agents/' + A1) return agent;
+      return page([
+        step({ step_seq: 1, kind: 'llm_call', duration_ms: 1200, routing: '{"model_used":"model-x"}' }),
+        step({ step_seq: 2, kind: 'tool_call', tool_name: 'docker.list_containers', duration_ms: 180 }),
+        step({ step_seq: 3, kind: 'llm_call', duration_ms: 3800 }),
+      ]);
+    });
+    show('/executions/' + X1);
+    const flow = await screen.findByRole('region', { name: 'Luồng của lần chạy' });
+    expect(within(flow).getByText('2 lượt · 5.000 ms')).toBeTruthy();
+    expect(within(flow).getByText('1 lượt · 180 ms')).toBeTruthy();
+    expect(node('Kết quả').dataset.state).toBe('done');
+    expect(within(node('Kết quả')).getByText('Xong')).toBeTruthy();
+    expect(within(flow).getByRole('button', { name: 'Phát lại' })).toBeTruthy();
+    expect(stream.opened).toBe(0);
+  });
+
+  it('lần chạy đang chạy: node của bước đang mở được làm nổi; có sự kiện thì tải lại ngay, không chờ nhịp tự làm mới', async () => {
+    let steps = [step({ step_seq: 1, kind: 'llm_call', status: 'started' })];
+    client.get.mockImplementation(async (path: string) => {
+      if (path === '/executions/' + X1) return execution({ status: 'running', output: null });
+      if (path.startsWith(`/executions/${X1}/tasks`)) return page([{ ...task, status: 'running' }]);
+      if (path === '/agents/' + A1) return agent;
+      return page(steps);
+    });
+    show('/executions/' + X1);
+    await screen.findByRole('region', { name: 'Luồng của lần chạy' });
+    expect(node('Model').dataset.state).toBe('active');
+    expect(document.querySelector('.flow-edge[data-active]')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Phát lại' })).toBeNull();
+    await waitFor(() => expect(stream.opened).toBe(1));
+    steps = [step({ step_seq: 1, kind: 'llm_call' }), step({ step_seq: 2, kind: 'tool_call', status: 'started', tool_name: 'docker.list_containers' })];
+    stream.emit!();
+    await waitFor(() => expect(node('Gateway + tool').dataset.state).toBe('active'));
+    expect(node('Model').dataset.state).toBe('done');
+    // Bước vừa xuất hiện được đánh dấu là mới.
+    expect(document.querySelectorAll('.steps li.row-new')).toHaveLength(1);
   });
 });

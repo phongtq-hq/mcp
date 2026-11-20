@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
 import { api, get, soft, type Page as PageOf, type Schemas } from '@/api/client';
 import { Async } from '@/components/async';
@@ -8,7 +8,10 @@ import { t, tOr } from '@/i18n';
 import { fmtDuration, fmtMoney, fmtNumber, fmtTime, isUuid, shortId } from '@/lib/format';
 import { useTitle } from '@/lib/use-title';
 import { json, visible } from '@/lib/visible';
+import { useNewKeys } from '@/lib/use-new-keys';
+import { ExecutionFlow } from './execution-flow';
 import { messageOf, modeLabel, problemText, TERMINAL } from './shared';
+import { useExecutionStream } from './use-stream';
 
 type Execution = Schemas['Execution'];
 type Task = Schemas['Task'];
@@ -72,6 +75,8 @@ function TaskCard({ task, steps, agents }: { task: Task; steps: Step[]; agents: 
     enabled: open,
   });
   const full = new Map((detail.data?.data ?? []).map(s => [s.id, s]));
+  // Bước xuất hiện trong lúc đang xem (lần chạy còn chạy) trượt vào, để thấy cái gì vừa thêm.
+  const fresh = useNewKeys(steps.map(s => s.id));
   return (
     <div className="card">
       <div className="row">
@@ -91,7 +96,7 @@ function TaskCard({ task, steps, agents }: { task: Task; steps: Step[]; agents: 
             {steps.map(s => {
               const loaded = full.get(s.id);
               return (
-                <li key={s.id}>
+                <li key={s.id} className={fresh.has(s.id) ? 'row-new' : undefined}>
                   <span className="seq">{s.step_seq}</span>
                   <span>{tOr('step_' + s.kind, s.kind)}</span>
                   {s.tool_name ? <span className="mono">{s.tool_name}</span> : null}
@@ -136,18 +141,23 @@ export default function ExecutionPage() {
   const { executionId } = useParams();
   const valid = isUuid(executionId);
   const id = valid ? executionId : '';
+  // Luồng sự kiện chỉ mở khi lần chạy còn chạy (biết được sau lượt tải đầu).
+  const [isLive, setLive] = useState(false);
+  const streaming = useExecutionStream(id, isLive);
   const query = useQuery({
     queryKey: ['execution', id],
     queryFn: () => load(id),
     enabled: valid,
-    refetchInterval: q => (q.state.data && !TERMINAL.has(q.state.data.execution.status) ? 3000 : false),
+    // Đang nghe luồng sự kiện thì nhịp tự làm mới chỉ còn là lưới an toàn.
+    refetchInterval: q => (q.state.data && !TERMINAL.has(q.state.data.execution.status) ? (streaming ? 10000 : 3000) : false),
   });
+  const live = !!query.data && !TERMINAL.has(query.data.execution.status);
+  useEffect(() => { setLive(live); }, [live]);
   useTitle(valid ? t('execution') + ' ' + shortId(id) : null);
   if (!valid) return <Navigate to="/" replace />;
   return (
     <Async loading="detail" query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
       {({ execution: x, tasks, steps, agents }) => {
-        const live = !TERMINAL.has(x.status);
         const output = messageOf(x.output);
         const error = problemText(x.error);
         // Một task: nêu Agent và model ngay ở đầu trang. Nhiều task (kế hoạch): từng thẻ task tự nêu.
@@ -178,6 +188,12 @@ export default function ExecutionPage() {
                   ? <StatCard label={t('agent')} value={agents.get(only.agent_id)?.name ?? shortId(only.agent_id)} hint={'v' + only.agent_version + (model ? ' · ' + model : '')} />
                   : <StatCard label={t('mode')} value={modeLabel(x.mode)} hint={t('tasks') + ': ' + tasks.length} />}
               </div>
+              {only ? (
+                <ExecutionFlow
+                  status={x.status} steps={steps[0]?.data ?? []} live={live}
+                  agentName={agents.get(only.agent_id)?.name ?? shortId(only.agent_id)} modelName={model ?? null}
+                />
+              ) : null}
               <div className="card">
                 <h2>{t('input')}</h2>
                 <div className="answer">{visible(messageOf(x.input)) || '—'}</div>

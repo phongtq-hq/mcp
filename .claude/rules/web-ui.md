@@ -64,6 +64,17 @@ Mọi thứ đến từ API có thể do model hoặc hệ thống ngoài sinh r
 - Thêm phụ thuộc lúc chạy (thứ vào bundle) là thay đổi phải nêu rõ: dùng `/add-ui-dependency`. Phiên bản ghim chính xác, cài bằng `npm ci --ignore-scripts`.
 - Bản build (`internal/webui/dist`) không vào repo.
 
+## Token và chuyển động
+
+- Màu, khoảng cách, cỡ chữ, bo góc, đổ bóng, thời lượng và easing là biến CSS ở `styles/tokens.css`. Không viết số thời lượng hay easing trong component hay ở `app.css`; phía JavaScript đọc cùng token qua `lib/motion.ts` (`durationMs`, `reducedMotion`).
+- Mỗi hiệu ứng trả lời một câu hỏi của người dùng, ghi ở chú thích của khối CSS đó. Không trả lời được thì không thêm.
+- Chỉ đổi `transform`, `opacity` và màu. Không có hiệu ứng nào chặn thao tác; hiệu ứng dài (phát lại luồng) dừng được.
+- `prefers-reduced-motion` đưa mọi thời lượng về gần 0 ngay ở token; hiệu ứng lặp (vòng quay, chấm chạy, ánh trượt của khung chờ) tắt hẳn.
+- Trang chi tiết phê duyệt nằm trong `.no-motion`: nội dung mà người duyệt dựa vào không có chuyển động.
+- Trạng thái hiện bằng hình (`StatusIcon`) và chữ, không chỉ bằng màu. Tải lần đầu dùng `Skeleton` (qua `Async`, `loading="detail"` cho trang chi tiết), không dùng vòng xoay cho nội dung.
+- Không thêm thư viện animation: CSS (`@starting-style`, keyframes) và `lib/use-tween.ts` đủ cho các hiệu ứng hiện có (đã đánh giá `motion` theo `/add-ui-dependency`).
+- Sơ đồ luồng (`lib/flow.ts`, `components/flow-diagram.tsx`) chỉ vẽ từ bước thật của lần chạy; không dựng dữ liệu minh hoạ.
+
 ## i18n
 
 - Không có chuỗi hiển thị cứng trong component: mọi chuỗi qua `t('khoá')`. `vi.ts` là chuẩn; thêm khoá thì thêm ở `en.ts` cùng lúc, cùng bộ tham số `{tên}` (kiểu và `i18n.test.ts` buộc).

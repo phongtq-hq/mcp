@@ -61,6 +61,8 @@
   --dur-base: 180ms;
   --dur-slow: 280ms;
   --dur-flow: 900ms;
+  /* Một vòng của hiệu ứng lặp báo "đang làm" (vòng quay, ánh trượt của khung chờ). */
+  --dur-loop: 1200ms;
   --ease-out: cubic-bezier(.2, .8, .2, 1);
   --ease-in-out: cubic-bezier(.4, 0, .2, 1);
   /* Vệt đánh dấu một dòng vừa xuất hiện: đủ lâu để mắt bắt kịp, rồi tự tắt. */
