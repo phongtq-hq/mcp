@@ -32,7 +32,9 @@ const noNetworkProperties = ['error',
 // mình phải dùng bí danh @/ (import tương đối `../` bị cấm), nên các mẫu theo @/ bên dưới
 // không lách được bằng đường dẫn tương đối.
 const relative = { group: ['../**', '..'], message: 'Import ngoài thư mục hiện tại dùng bí danh @/.' };
-const layer = (message, ...groups) => ['error', { patterns: [relative, { group: groups, message }] }];
+// Thư viện đồ thị chỉ được import ở components/graph.tsx: thay thư viện sau này chạm một file.
+const graphLib = { group: ['@xyflow/*'], message: 'Thư viện đồ thị chỉ import ở src/components/graph.tsx; nơi khác dùng @/components/graph.' };
+const layer = (message, ...groups) => ['error', { patterns: [relative, graphLib, { group: groups, message }] }];
 
 export default tseslint.config(
   { ignores: ['node_modules', 'src/api/schema.gen.ts'] },
@@ -50,7 +52,7 @@ export default tseslint.config(
       'no-restricted-syntax': ['error', ...noUnsafeDom, noDynamicImport],
       'no-restricted-globals': noNetworkGlobals,
       'no-restricted-properties': noNetworkProperties,
-      'no-restricted-imports': ['error', { patterns: [relative] }],
+      'no-restricted-imports': ['error', { patterns: [relative, graphLib] }],
     },
   },
   { files: ['src/app/**'], rules: { 'no-restricted-syntax': ['error', ...noUnsafeDom] } },
@@ -74,6 +76,10 @@ export default tseslint.config(
   {
     files: ['src/api/**'],
     rules: { 'no-restricted-imports': layer('api/ không phụ thuộc vào màn hình.', '@/features/**', '@/components/**', '@/app/**') },
+  },
+  {
+    files: ['src/components/graph.tsx'],
+    rules: { 'no-restricted-imports': layer('components/ chỉ dùng lib/ và i18n/.', '@/features/**', '@/api/**', '@/auth/**', '@/app/**').map((v, i) => (i === 1 ? { patterns: v.patterns.filter(p => p !== graphLib) } : v)) },
   },
   { files: ['*.config.{js,ts}'], languageOptions: { globals: globals.node } },
 );

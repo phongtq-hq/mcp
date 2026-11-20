@@ -27,6 +27,7 @@ Thước đo: số operation của `openapi.yaml` có màn hình dùng tới. Hi
 | 9 | API key, webhook thông báo, bộ lọc audit | Chưa làm | |
 | 10 | Chi phí: biểu đồ theo thời gian, dự báo, usage records | Chưa làm | |
 | 11 | Test đầu-cuối trong trình duyệt cho ba luồng chính | Chưa làm | |
+| — | Khung trang control plane, danh mục Agent (chỉ đọc), bản đồ Agent | Xong, chưa commit (nhánh `ui/control-plane`); xem [kế hoạch](ui-refactor-plan.md) | |
 
 Hai commit khác trên cùng nhánh không thuộc việc giao diện: `5a7f8c4` (triển khai bằng Docker Compose, ADR-0017) và `c0112d8` (rule / agent / skill cho giao diện trong `.claude/`).
 

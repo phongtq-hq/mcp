@@ -72,6 +72,7 @@ Mọi thứ đến từ API có thể do model hoặc hệ thống ngoài sinh r
 - `prefers-reduced-motion` đưa mọi thời lượng về gần 0 ngay ở token; hiệu ứng lặp (vòng quay, chấm chạy, ánh trượt của khung chờ) tắt hẳn.
 - Trang chi tiết phê duyệt nằm trong `.no-motion`: nội dung mà người duyệt dựa vào không có chuyển động.
 - Trạng thái hiện bằng hình (`StatusIcon`) và chữ, không chỉ bằng màu. Tải lần đầu dùng `Skeleton` (qua `Async`, `loading="detail"` cho trang chi tiết), không dùng vòng xoay cho nội dung.
+- Giao diện tối là mặc định; giao diện sáng là bộ token dưới `:root[data-theme="light"]` (`lib/theme.ts`). Component dùng token theo nghĩa (`--surface`, `--border`, `--ok`…), không viết mã màu: thêm màu là thêm token ở cả hai bộ.
 - Không thêm thư viện animation: CSS (`@starting-style`, keyframes) và `lib/use-tween.ts` đủ cho các hiệu ứng hiện có (đã đánh giá `motion` theo `/add-ui-dependency`).
 - Sơ đồ luồng (`lib/flow.ts`, `components/flow-diagram.tsx`) chỉ vẽ từ bước thật của lần chạy; không dựng dữ liệu minh hoạ.
 
@@ -90,6 +91,9 @@ Mọi thứ đến từ API có thể do model hoặc hệ thống ngoài sinh r
 - Hành động có hậu quả (chạy, huỷ, duyệt) có bước xác nhận, khoá nút trong lúc gửi, và hiện kết quả thật của API (kể cả lỗi).
 - Nút là `<button>`, liên kết là `<Link>` / `<a>`; ô nhập có nhãn; không dùng `div` có `onClick` cho thứ bấm được.
 - Lựa chọn hiển thị (bộ lọc, khoảng thời gian) giữ qua `useStored` (`lib/use-stored.ts`).
+- Mục điều hướng thêm ở `app/navigation.ts` (một nguồn cho thanh bên, breadcrumb, bảng lệnh), và chỉ khi màn hình đã chạy trên API thật: không có mục "sắp có".
+- Chi tiết của thứ đang chọn mà không rời màn hình: `Inspector` (`components/inspector.tsx`), không tự viết ngăn bên khác. Biểu tượng lấy từ `components/icon.tsx`.
+- Đồ thị: `@xyflow/react` chỉ được import ở `components/graph.tsx`. Dữ liệu vẽ đi qua ba lớp tách nhau như `features/agent-map` (ảnh chụp từ API → đồ thị nghiệp vụ → lớp nhìn + toạ độ); component vẽ không gọi API. Fixture tổng hợp chỉ được import từ file test.
 
 ## Test và lệnh
 

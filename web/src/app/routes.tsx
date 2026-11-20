@@ -21,6 +21,8 @@ const ProjectNew = page(() => import('@/features/projects/project-new-page'));
 const ProjectLayout = page(() => import('@/features/projects/project-layout'));
 const ProjectSettingsTab = page(() => import('@/features/projects/project-settings-tab'));
 const Organization = page(() => import('@/features/organization/organization-page'));
+const Agents = page(() => import('@/features/agents/agents-page'));
+const AgentMap = page(() => import('@/features/agent-map/agent-map-page'));
 const AgentsTab = page(() => import('@/features/agents/agents-tab'));
 const ExecutionsTab = page(() => import('@/features/executions/executions-tab'));
 const ExecutionPage = page(() => import('@/features/executions/execution-page'));
@@ -51,6 +53,8 @@ export function AppRoutes() {
             <Route path="workflows" element={<WorkflowsTab />} />
             <Route path="settings" element={<ProjectSettingsTab />} />
           </Route>
+          <Route path="agents" element={<Agents />} />
+          <Route path="agents/map" element={<AgentMap />} />
           <Route path="executions/:executionId" element={<ExecutionPage />} />
           <Route path="approvals" element={<Approvals />} />
           <Route path="approvals/:approvalId" element={<ApprovalDetail />} />

@@ -6,6 +6,8 @@ import { App } from '@/app/app';
 import * as auth from '@/auth/oidc';
 import { Notice, Spinner } from '@/components/ui';
 import { t } from '@/i18n';
+// Áp giao diện sáng / tối đã chọn trước khi dựng gì (kể cả màn hình đăng nhập).
+import '@/lib/theme';
 import '@/styles/tokens.css';
 import '@/styles/app.css';
 
