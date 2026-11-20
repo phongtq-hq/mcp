@@ -243,9 +243,9 @@ describe('Model', () => {
     client.get.mockResolvedValue(page([{ id: 'pr1', model_id: MODEL, scope: 'list', version: 1, currency: 'USD', input_per_mtok: '3.00000000', output_per_mtok: '15.00000000', cache_write_per_mtok: '3.75000000', reasoning_per_mtok: '15.50000000', source: 'hợp đồng 2026', effective_from: '2026-01-01T00:00:00Z', effective_to: null }]));
     client.api.mockResolvedValue({});
     show('/models/' + MODEL);
-    expect(await screen.findByText('3.00000000')).toBeTruthy();
+    expect(await screen.findByText('3.00')).toBeTruthy();
     expect(screen.getByText('đang hiệu lực')).toBeTruthy();
-    for (const text of ['3.75000000', '15.50000000', 'hợp đồng 2026']) expect(screen.getByText(text)).toBeTruthy();
+    for (const text of ['3.75', '15.50', 'hợp đồng 2026']) expect(screen.getByText(text)).toBeTruthy();
     expect(screen.getByText(/chưa có giá hiệu lực/)).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Đầu vào / 1 triệu token'), { target: { value: '0.10000001' } });

@@ -1,12 +1,14 @@
 // ApiError: lỗi của một lời gọi Management API (RFC 9457). status = 0 khi không tới được máy chủ.
 export interface FieldProblem { field: string; code?: string; message: string }
-export interface ProblemLike { detail?: string; title?: string; code?: string; errors?: unknown }
+export interface ProblemLike { detail?: string; title?: string; code?: string; errors?: unknown; trace_id?: unknown }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   // Lỗi theo trường của một phản hồi 400 / 422 (`errors[]` trong thân lỗi); rỗng nếu không có.
   readonly fields: readonly FieldProblem[];
+  // Mã trace của request lỗi, để người dùng gửi cho người vận hành.
+  readonly traceId: string | undefined;
 
   constructor(status: number, problem: ProblemLike | null) {
     super((problem && (problem.detail || problem.title)) || ('HTTP ' + status));
@@ -14,6 +16,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = problem?.code;
     this.fields = fieldProblems(problem?.errors);
+    this.traceId = typeof problem?.trace_id === 'string' && /^[0-9a-f]{8,64}$/.test(problem.trace_id) ? problem.trace_id : undefined;
   }
 }
 

@@ -1,24 +1,22 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { api, get, soft, type Page as PageOf, type Schemas } from '@/api/client';
+import { api, get, type Page as PageOf, type Schemas } from '@/api/client';
+import { pages, rows } from '@/api/paging';
 import { Async } from '@/components/async';
 import { DataTable } from '@/components/data-table';
+import { LoadMore } from '@/components/load-more';
 import { ErrorBox, StatusBadge } from '@/components/ui';
 import { t } from '@/i18n';
-import { fmtMoney, fmtTime, shortId } from '@/lib/format';
+import { fmtMoney, fmtTime, isUuid, shortId } from '@/lib/format';
+import { useStored } from '@/lib/use-stored';
 import { messageOf, modeLabel, TERMINAL } from './shared';
 
 type Agent = Schemas['Agent'];
 type Execution = Schemas['Execution'];
 
-async function load(projectId: string) {
-  const [list, agents] = await Promise.all([
-    get<PageOf<Execution>>(`/projects/${projectId}/executions?limit=50`),
-    soft(get<PageOf<Agent>>(`/projects/${projectId}/agents?limit=200`)),
-  ]);
-  return { list, agents };
-}
+// Trạng thái lọc được, theo thứ tự một lần chạy đi qua.
+const STATUSES = ['queued', 'running', 'waiting_approval', 'paused', 'completed', 'failed', 'cancelled', 'budget_exceeded', 'timed_out'] as const;
 
 function RunForm({ projectId, agents }: { projectId: string; agents: Agent[] }) {
   const navigate = useNavigate();
@@ -69,33 +67,66 @@ function RunForm({ projectId, agents }: { projectId: string; agents: Agent[] }) 
 export default function ExecutionsTab() {
   const { projectId = '' } = useParams();
   const navigate = useNavigate();
-  const query = useQuery({
-    queryKey: ['project', projectId, 'executions'],
-    queryFn: () => load(projectId),
+  // Form chạy mới chỉ mở khi bấm: người vào để xem lịch sử thấy ngay danh sách.
+  const [running, setRunning] = useState(false);
+  // Bộ lọc là lựa chọn hiển thị, giữ theo từng dự án; lọc do máy chủ làm (status, agent_id).
+  const [status, setStatus] = useStored(`hq.executions.${projectId}.status`, '');
+  const [agent, setAgent] = useStored(`hq.executions.${projectId}.agent`, '');
+  const agents = useQuery({ queryKey: ['project', projectId, 'agents', 'for-executions'], queryFn: () => get<PageOf<Agent>>(`/projects/${projectId}/agents?limit=200`) });
+  const known = agents.data?.data ?? [];
+  const statusFilter = (STATUSES as readonly string[]).includes(status) ? status : '';
+  // Agent đã chọn không còn trong dự án (hoặc giá trị lưu sai dạng) thì bỏ lọc.
+  const agentFilter = isUuid(agent) && known.some(a => a.id === agent) ? agent : '';
+  const path = `/projects/${projectId}/executions?limit=50` + (statusFilter ? '&status=' + statusFilter : '') + (agentFilter ? '&agent_id=' + agentFilter : '');
+  const list = useInfiniteQuery({
+    queryKey: ['project', projectId, 'executions', statusFilter, agentFilter],
+    ...pages<Execution>(path),
     // Còn lần chạy chưa kết thúc thì tự làm mới.
-    refetchInterval: q => (q.state.data?.list.data.some(x => !TERMINAL.has(x.status)) ? 5000 : false),
+    refetchInterval: q => (rows(q.state.data).some(x => !TERMINAL.has(x.status)) ? 5000 : false),
   });
+  const filtered = statusFilter !== '' || agentFilter !== '';
   return (
-    <Async query={query}>
-      {({ list, agents }) => (
-        <>
-          <RunForm projectId={projectId} agents={(agents ? agents.data : []).filter(a => a.status === 'active' && a.active_version)} />
-          <DataTable
-            rows={list.data}
-            rowKey={x => x.id}
-            onRow={x => navigate('/executions/' + x.id)}
-            emptyText={t('noExecutions')}
-            columns={[
-              { label: t('execution'), cell: x => <Link to={'/executions/' + x.id} className="mono" onClick={e => e.stopPropagation()}>{shortId(x.id)}</Link> },
-              { label: t('status'), cell: x => <StatusBadge status={x.status} /> },
-              { label: t('mode'), cell: x => modeLabel(x.mode) },
-              { label: t('request'), cell: x => <div className="clip" title={messageOf(x.input)}>{messageOf(x.input) || '—'}</div> },
-              { label: t('cost'), className: 'num', cell: x => fmtMoney(x.estimated_cost) },
-              { label: t('createdAt'), className: 'nowrap', cell: x => fmtTime(x.created_at) },
-            ]}
-          />
-        </>
-      )}
-    </Async>
+    <div className="stack">
+      <div className="row">
+        <label className="inline">
+          <span className="small muted">{t('status')}</span>
+          <select value={statusFilter} onChange={e => setStatus(e.target.value)}>
+            <option value="">{t('filterAllStatuses')}</option>
+            {STATUSES.map(v => <option key={v} value={v}>{t(`st_${v}`)}</option>)}
+          </select>
+        </label>
+        <label className="inline">
+          <span className="small muted">{t('agent')}</span>
+          <select value={agentFilter} onChange={e => setAgent(e.target.value)}>
+            <option value="">{t('filterAllAgents')}</option>
+            {known.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+        <span className="spacer" />
+        <button type="button" className="primary" aria-expanded={running} onClick={() => setRunning(v => !v)}>{running ? t('close') : t('newExecution')}</button>
+      </div>
+      {running ? <RunForm projectId={projectId} agents={known.filter(a => a.status === 'active' && a.active_version)} /> : null}
+      <Async query={list}>
+        {data => (
+          <>
+            <DataTable
+              rows={rows(data)}
+              rowKey={x => x.id}
+              onRow={x => navigate('/executions/' + x.id)}
+              emptyText={filtered ? t('noExecutionsMatch') : t('noExecutions')}
+              columns={[
+                { label: t('execution'), cell: x => <Link to={'/executions/' + x.id} className="mono" onClick={e => e.stopPropagation()}>{shortId(x.id)}</Link> },
+                { label: t('status'), cell: x => <StatusBadge status={x.status} /> },
+                { label: t('mode'), cell: x => modeLabel(x.mode) },
+                { label: t('request'), cell: x => <div className="clip" title={messageOf(x.input)}>{messageOf(x.input) || '—'}</div> },
+                { label: t('cost'), className: 'num', cell: x => fmtMoney(x.estimated_cost) },
+                { label: t('createdAt'), className: 'nowrap', cell: x => fmtTime(x.created_at) },
+              ]}
+            />
+            <LoadMore query={list} />
+          </>
+        )}
+      </Async>
+    </div>
   );
 }

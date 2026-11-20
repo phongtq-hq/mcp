@@ -11,7 +11,7 @@ import { Section, useSections } from '@/components/sections';
 import { Badge, ErrorBox, KV, Notice, Page, Spinner } from '@/components/ui';
 import { useSubmit } from '@/components/use-submit';
 import { t } from '@/i18n';
-import { fmtTime, isUuid, localInputToISO } from '@/lib/format';
+import { fmtRate, fmtTime, isUuid, localInputToISO } from '@/lib/format';
 import { capabilitiesOf, draftOf, ModelFields, type ModelDraft } from './model-fields';
 
 type Model = Schemas['Model'];
@@ -93,7 +93,7 @@ function PricingSection({ modelId }: { modelId: string }) {
   const reload = async () => {
     await Promise.all([client.invalidateQueries({ queryKey: ['model', modelId] }), client.invalidateQueries({ queryKey: ['models'] })]);
   };
-  const amount = (v: string | null | undefined) => v ?? '—';
+  const amount = fmtRate;
   return (
     <section className="card form" aria-label={t('pricing')}>
       <h2>{t('pricing')}</h2>
@@ -107,8 +107,8 @@ function PricingSection({ modelId }: { modelId: string }) {
               { label: t('version'), className: 'num', cell: p => p.version },
               { label: t('scope'), cell: p => (p.scope === 'organization' ? t('priceScopeOrg') : t('priceScopeList')) },
               { label: t('currency'), cell: p => p.currency },
-              { label: t('priceInput'), className: 'num', cell: p => p.input_per_mtok },
-              { label: t('priceOutput'), className: 'num', cell: p => p.output_per_mtok },
+              { label: t('priceInput'), className: 'num', cell: p => amount(p.input_per_mtok) },
+              { label: t('priceOutput'), className: 'num', cell: p => amount(p.output_per_mtok) },
               { label: t('priceCachedInput'), className: 'num', cell: p => amount(p.cached_input_per_mtok) },
               { label: t('priceCacheWrite'), className: 'num', cell: p => amount(p.cache_write_per_mtok) },
               { label: t('priceReasoning'), className: 'num', cell: p => amount(p.reasoning_per_mtok) },

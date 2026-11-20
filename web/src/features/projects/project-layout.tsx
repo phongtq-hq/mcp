@@ -5,6 +5,7 @@ import { Async } from '@/components/async';
 import { EnvLabel } from '@/components/labels';
 import { t, type Key } from '@/i18n';
 import { isUuid } from '@/lib/format';
+import { useTitle } from '@/lib/use-title';
 
 const TABS: readonly (readonly [string, Key])[] = [['executions', 'tabExecutions'], ['agents', 'tabAgents'], ['workflows', 'tabWorkflows'], ['settings', 'tabSettings']];
 
@@ -18,11 +19,12 @@ export default function ProjectLayout() {
     queryFn: () => get<Schemas['Project']>('/projects/' + projectId),
     enabled: valid,
   });
+  useTitle(query.data?.name);
   if (!valid) return <Navigate to="/" replace />;
   const last = location.pathname.split('/').filter(Boolean)[2];
   const tab = TABS.some(([key]) => key === last) ? last : 'executions';
   return (
-    <Async query={query}>
+    <Async query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
       {project => (
         <>
           <div className="crumbs"><Link to="/projects">{t('navProjects')}</Link> / {project.name}</div>

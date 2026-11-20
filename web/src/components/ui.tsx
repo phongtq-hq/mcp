@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { t, tOr } from '@/i18n';
 import { ApiError } from '@/lib/api-error';
+import { useTitle } from '@/lib/use-title';
 
 const TONE: Record<string, string> = {
   completed: 'ok', succeeded: 'ok', approved: 'ok', consumed: 'ok', active: 'ok', healthy: 'ok', success: 'ok',
@@ -45,7 +46,13 @@ export function ErrorBox({ error }: { error: unknown }) {
     if (error.status === 403) text = t('errForbidden') + (error.message ? ' (' + error.message + ')' : '');
     else if (error.status === 404) text = t('errNotFound');
   }
-  return <Notice kind="bad"><strong>{t('errTitle')}: </strong>{text}</Notice>;
+  const trace = error instanceof ApiError ? error.traceId : undefined;
+  return (
+    <Notice kind="bad">
+      <strong>{t('errTitle')}: </strong>{text}
+      {trace ? <div className="small">{t('errTrace')}: <span className="mono">{trace}</span></div> : null}
+    </Notice>
+  );
 }
 
 // KV: danh sách nhãn / giá trị. Mục null bị bỏ qua.
@@ -61,6 +68,7 @@ export function KV({ pairs }: { pairs: (readonly [string, ReactNode] | null)[] }
 }
 
 export function PageHead({ title, lead, actions }: { title: ReactNode; lead?: ReactNode; actions?: ReactNode }) {
+  useTitle(typeof title === 'string' ? title : null);
   return (
     <div className="page-head">
       <div>

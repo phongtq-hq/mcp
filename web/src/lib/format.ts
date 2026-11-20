@@ -5,7 +5,8 @@ export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(locale(), { dateStyle: 'short', timeStyle: 'medium' }).format(d);
+  // Năm đủ bốn chữ số: "20/11/26" đọc nhầm được ngày với năm.
+  return new Intl.DateTimeFormat(locale(), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(d);
 }
 
 // fmtRelative: "3 phút trước", "trong 12 phút".
@@ -52,7 +53,19 @@ export function fmtMoney(m: MoneyLike | null | undefined): string {
   }
 }
 
-export function shortId(id: string | null | undefined): string { return id ? String(id).slice(0, 8) : '—'; }
+// shortId: 8 ký tự CUỐI của định danh. Định danh của platform là UUIDv7: phần đầu là thời
+// gian, nên hai bản ghi tạo gần nhau có cùng 8 ký tự đầu; phần cuối là ngẫu nhiên.
+export function shortId(id: string | null | undefined): string { return id ? String(id).slice(-8) : '—'; }
+
+// fmtRate: đơn giá dạng chuỗi thập phân của API ("0.10000000") bỏ các số 0 thừa ở cuối, giữ
+// ít nhất hai chữ số lẻ. Chỉ cắt chuỗi, không đổi sang số: không làm tròn đơn giá.
+export function fmtRate(amount: string | null | undefined): string {
+  if (amount === null || amount === undefined || amount === '') return '—';
+  const m = /^(-?\d+)(?:\.(\d+))?$/.exec(amount);
+  if (!m) return amount;
+  const frac = (m[2] ?? '').replace(/0+$/, '').padEnd(2, '0');
+  return m[1] + '.' + frac;
+}
 
 // isUuid: định danh lấy từ thanh địa chỉ chỉ được ghép vào đường dẫn API khi đúng dạng.
 export function isUuid(s: string | undefined): s is string {

@@ -2471,7 +2471,7 @@ type OrganizationStatus string
 type OrganizationUpdate struct {
 	Name *string `json:"name,omitempty"`
 
-	// Settings Cấu hình tự do của organization. Khoá `model_routing` (xem ModelRoutingSettings) là ánh xạ tier → chuỗi model của Model Router và được kiểm khi ghi (422 nếu sai định dạng hoặc model không tồn tại trong tầm nhìn của tenant). Project có cùng khoá và ghi đè organization theo từng tier.
+	// Settings Cấu hình tự do của organization. Khoá `model_routing` (xem ModelRoutingSettings) là ánh xạ tier → chuỗi model của Model Router và được kiểm khi ghi (422 nếu sai định dạng hoặc model không tồn tại trong tầm nhìn của tenant). Project có cùng khoá và ghi đè organization theo từng tier. Khoá `console_assistant` (`{project_id, agent_id}`, hai UUID) chỉ ra Agent mà giao diện web dùng làm trợ lý trong bong bóng chat: mỗi câu hỏi là một execution `single_agent` của Agent đó, tạo bằng quyền của người hỏi. Máy chủ không kiểm khoá này; giao diện bỏ qua giá trị sai dạng.
 	Settings *map[string]interface{} `json:"settings,omitempty"`
 }
 

@@ -1,29 +1,40 @@
 // Bảng route. Đây là nơi duy nhất biết mọi feature; feature không import lẫn nhau.
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ComponentType } from 'react';
 import { Navigate, Route, Routes } from 'react-router';
 import { Spinner } from '@/components/ui';
+import { shouldReload } from '@/lib/chunk-reload';
 import { Shell } from './shell';
 
-const Overview = lazy(() => import('@/features/overview/overview-page'));
-const Projects = lazy(() => import('@/features/projects/projects-page'));
-const ProjectNew = lazy(() => import('@/features/projects/project-new-page'));
-const ProjectLayout = lazy(() => import('@/features/projects/project-layout'));
-const ProjectSettingsTab = lazy(() => import('@/features/projects/project-settings-tab'));
-const Organization = lazy(() => import('@/features/organization/organization-page'));
-const AgentsTab = lazy(() => import('@/features/agents/agents-tab'));
-const ExecutionsTab = lazy(() => import('@/features/executions/executions-tab'));
-const ExecutionPage = lazy(() => import('@/features/executions/execution-page'));
-const WorkflowsTab = lazy(() => import('@/features/workflows/workflows-tab'));
-const Approvals = lazy(() => import('@/features/approvals/approvals-page'));
-const ApprovalDetail = lazy(() => import('@/features/approvals/approval-detail-page'));
-const Cost = lazy(() => import('@/features/cost/cost-page'));
-const Mcp = lazy(() => import('@/features/mcp/mcp-page'));
-const Audit = lazy(() => import('@/features/audit/audit-page'));
-const Models = lazy(() => import('@/features/models/models-page'));
-const Model = lazy(() => import('@/features/models/model-page'));
-const Providers = lazy(() => import('@/features/models/providers-page'));
-const Provider = lazy(() => import('@/features/models/provider-page'));
-const Routing = lazy(() => import('@/features/models/routing-page'));
+// page: màn hình nạp khi cần. Nạp thất bại thường là do tab đang giữ bản build cũ (xem
+// lib/chunk-reload.ts): tải lại trang một lần; nếu vừa tải lại rồi thì để lỗi nổi lên.
+function page(load: () => Promise<{ default: ComponentType }>) {
+  return lazy(() => load().catch((err: unknown) => {
+    if (!shouldReload(Date.now())) throw err;
+    location.reload();
+    return new Promise<{ default: ComponentType }>(() => { /* trang đang tải lại */ });
+  }));
+}
+
+const Overview = page(() => import('@/features/overview/overview-page'));
+const Projects = page(() => import('@/features/projects/projects-page'));
+const ProjectNew = page(() => import('@/features/projects/project-new-page'));
+const ProjectLayout = page(() => import('@/features/projects/project-layout'));
+const ProjectSettingsTab = page(() => import('@/features/projects/project-settings-tab'));
+const Organization = page(() => import('@/features/organization/organization-page'));
+const AgentsTab = page(() => import('@/features/agents/agents-tab'));
+const ExecutionsTab = page(() => import('@/features/executions/executions-tab'));
+const ExecutionPage = page(() => import('@/features/executions/execution-page'));
+const WorkflowsTab = page(() => import('@/features/workflows/workflows-tab'));
+const Approvals = page(() => import('@/features/approvals/approvals-page'));
+const ApprovalDetail = page(() => import('@/features/approvals/approval-detail-page'));
+const Cost = page(() => import('@/features/cost/cost-page'));
+const Mcp = page(() => import('@/features/mcp/mcp-page'));
+const Audit = page(() => import('@/features/audit/audit-page'));
+const Models = page(() => import('@/features/models/models-page'));
+const Model = page(() => import('@/features/models/model-page'));
+const Providers = page(() => import('@/features/models/providers-page'));
+const Provider = page(() => import('@/features/models/provider-page'));
+const Routing = page(() => import('@/features/models/routing-page'));
 
 export function AppRoutes() {
   return (
