@@ -4,9 +4,10 @@ import { Link } from 'react-router';
 import { get, soft, type Page as PageOf, type Schemas } from '@/api/client';
 import { ApprovalTable } from '@/components/approval-table';
 import { Async } from '@/components/async';
+import { Count, MoneyCount } from '@/components/count';
 import { KV, Page, StatusBadge } from '@/components/ui';
 import { t } from '@/i18n';
-import { fmtMoney, fmtNumber } from '@/lib/format';
+import { fmtNumber } from '@/lib/format';
 
 function monthRange(): [string, string] {
   const now = new Date();
@@ -42,7 +43,7 @@ export default function OverviewPage() {
   const query = useQuery({ queryKey: ['overview'], queryFn: load });
   return (
     <Page title={t('navOverview')} lead={t('overviewLead')}>
-      <Async query={query}>
+      <Async query={query} loading="detail">
         {({ org, projects, pending, usage, servers, tools }) => {
           const list = pending ? pending.data : [];
           return (
@@ -51,16 +52,16 @@ export default function OverviewPage() {
                 <KV pairs={[[t('organization'), `${org.name} (${org.slug})`], [t('status'), <StatusBadge status={org.status} />]]} />
               </div>
               <div className="grid">
-                <StatLink to="/projects" label={t('statProjects')} value={projects ? fmtNumber(projects.data.length) : '—'} />
-                <StatLink to="/approvals" label={t('statPendingApprovals')} value={pending ? fmtNumber(list.length) : '—'} hint={t('statPendingHint')} />
+                <StatLink to="/projects" label={t('statProjects')} value={projects ? <Count value={projects.data.length} format={fmtNumber} /> : '—'} />
+                <StatLink to="/approvals" label={t('statPendingApprovals')} value={pending ? <Count value={list.length} format={fmtNumber} /> : '—'} hint={t('statPendingHint')} />
                 <StatLink
                   to="/cost" label={t('statCostMonth')}
-                  value={usage ? fmtMoney(usage.totals.estimated_cost) : '—'}
+                  value={usage ? <MoneyCount money={usage.totals.estimated_cost} /> : '—'}
                   hint={usage ? t('statCostHint', { calls: fmtNumber(usage.totals.calls) }) : null}
                 />
                 <StatLink
                   to="/mcp" label={t('statServers')}
-                  value={servers ? fmtNumber(servers.data.length) : '—'}
+                  value={servers ? <Count value={servers.data.length} format={fmtNumber} /> : '—'}
                   hint={tools ? t('statServersHint', { tools: fmtNumber(tools.data.length) }) : null}
                 />
               </div>

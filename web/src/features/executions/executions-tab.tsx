@@ -9,11 +9,14 @@ import { LoadMore } from '@/components/load-more';
 import { ErrorBox, StatusBadge } from '@/components/ui';
 import { t } from '@/i18n';
 import { fmtMoney, fmtTime, isUuid, shortId } from '@/lib/format';
+import { store, stored } from '@/lib/storage';
 import { useStored } from '@/lib/use-stored';
 import { messageOf, modeLabel, TERMINAL } from './shared';
 
 type Agent = Schemas['Agent'];
 type Execution = Schemas['Execution'];
+
+const HINT_KEY = 'hq.hint.run-agent';
 
 // Trạng thái lọc được, theo thứ tự một lần chạy đi qua.
 const STATUSES = ['queued', 'running', 'waiting_approval', 'paused', 'completed', 'failed', 'cancelled', 'budget_exceeded', 'timed_out'] as const;
@@ -45,7 +48,7 @@ function RunForm({ projectId, agents }: { projectId: string; agents: Agent[] }) 
   };
 
   return (
-    <form className="card form" onSubmit={e => { void submit(e); }}>
+    <form className="card form reveal" onSubmit={e => { void submit(e); }}>
       <div><strong>{t('newExecution')}</strong><div className="small muted">{t('newExecutionLead')}</div></div>
       <label>
         {t('chooseAgent')}
@@ -69,6 +72,8 @@ export default function ExecutionsTab() {
   const navigate = useNavigate();
   // Form chạy mới chỉ mở khi bấm: người vào để xem lịch sử thấy ngay danh sách.
   const [running, setRunning] = useState(false);
+  // Lần đầu vào màn hình này trong phiên: nút hành động chính nháy hai nhịp rồi thôi.
+  const [hint] = useState(() => { const first = stored(HINT_KEY, '') === ''; if (first) store(HINT_KEY, '1'); return first; });
   // Bộ lọc là lựa chọn hiển thị, giữ theo từng dự án; lọc do máy chủ làm (status, agent_id).
   const [status, setStatus] = useStored(`hq.executions.${projectId}.status`, '');
   const [agent, setAgent] = useStored(`hq.executions.${projectId}.agent`, '');
@@ -103,7 +108,7 @@ export default function ExecutionsTab() {
           </select>
         </label>
         <span className="spacer" />
-        <button type="button" className="primary" aria-expanded={running} onClick={() => setRunning(v => !v)}>{running ? t('close') : t('newExecution')}</button>
+        <button type="button" className={hint && !running ? 'primary attention' : 'primary'} aria-expanded={running} onClick={() => setRunning(v => !v)}>{running ? t('close') : t('newExecution')}</button>
       </div>
       {running ? <RunForm projectId={projectId} agents={known.filter(a => a.status === 'active' && a.active_version)} /> : null}
       <Async query={list}>
@@ -114,6 +119,8 @@ export default function ExecutionsTab() {
               rowKey={x => x.id}
               onRow={x => navigate('/executions/' + x.id)}
               emptyText={filtered ? t('noExecutionsMatch') : t('noExecutions')}
+              emptyHint={filtered ? null : t('noExecutionsHint')}
+              emptyAction={filtered || running ? null : <button type="button" className="primary" onClick={() => setRunning(true)}>{t('newExecution')}</button>}
               columns={[
                 { label: t('execution'), cell: x => <Link to={'/executions/' + x.id} className="mono" onClick={e => e.stopPropagation()}>{shortId(x.id)}</Link> },
                 { label: t('status'), cell: x => <StatusBadge status={x.status} /> },

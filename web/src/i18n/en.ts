@@ -392,4 +392,8 @@ export const en: Record<Key, string> = {
   filterAllAgents: 'All agents',
   filterAllStatuses: 'All statuses',
   noExecutionsMatch: 'No runs match the filters.',
+  noProjectsHint: 'A project groups the agents, workflows and runs of one line of work. Create the first project to get started.',
+  noWorkflowsHint: 'A workflow is a process made of agent steps, wait steps and approval gates. The console cannot create workflows yet: create one through the /v1 API, then run it here.',
+  noAgentsHint: 'An agent is a configuration of prompt, model, tools and limits. The console cannot create agents yet: create one through the /v1 API, then run it from the Runs tab.',
+  noExecutionsHint: 'A run is one piece of work handed to an agent. Each run calls a model and is billed.',
 };

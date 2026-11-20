@@ -84,6 +84,7 @@ export default function WorkflowsTab() {
             rowKey={w => w.id}
             onRow={setSelected}
             emptyText={t('noWorkflows')}
+            emptyHint={t('noWorkflowsHint')}
             columns={[
               { label: t('name'), cell: w => <><div>{w.name}</div>{w.description ? <div className="small muted">{w.description}</div> : null}</> },
               { label: t('status'), cell: w => <StatusBadge status={w.status} /> },

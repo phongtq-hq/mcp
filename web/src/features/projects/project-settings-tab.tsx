@@ -128,7 +128,7 @@ export default function ProjectSettingsTab() {
     },
   });
   return (
-    <Async query={query}>
+    <Async loading="detail" query={query}>
       {loaded => {
         const etag = loaded.project.etag;
         // Không có ETag thì không sửa: gửi PATCH thiếu If-Match là ghi vô điều kiện, và với

@@ -29,7 +29,7 @@ export default function OrganizationPage() {
   const query = useQuery({ queryKey: ['organization', 'settings'], queryFn: () => getWithETag<Organization>('/organization') });
   return (
     <Page title={t('navOrganization')} lead={t('organizationLead')}>
-      <Async query={query}>
+      <Async loading="detail" query={query}>
         {(loaded: WithETag<Organization>) => {
           const org = loaded.data;
           const etag = loaded.etag;

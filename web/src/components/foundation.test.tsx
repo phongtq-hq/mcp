@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { Count, MoneyCount } from './count';
 import { DataTable } from './data-table';
 import { Skeleton } from './skeleton';
 import { StatusBadge } from './ui';
@@ -47,5 +48,18 @@ describe('token chuyển động', () => {
     expect(reducedMotion()).toBe(true);
     expect(durationMs('fast')).toBeGreaterThan(0);
     expect(durationMs('flow')).toBeGreaterThan(durationMs('fast'));
+  });
+});
+
+describe('số liệu chuyển tiếp', () => {
+  it('giảm chuyển động: hiện ngay giá trị mới; số tiền luôn là đúng chuỗi của API', () => {
+    const view = render(<><Count value={11} format={n => String(n)} /> | <MoneyCount money={{ amount: '0.00560000', currency: 'USD' }} /></>);
+    expect(view.container.textContent).toContain('11');
+    expect(view.container.textContent).toContain('0,0056');
+    view.rerender(<><Count value={12} format={n => String(n)} /> | <MoneyCount money={{ amount: '0.00570000', currency: 'USD' }} /></>);
+    expect(view.container.textContent).toContain('12');
+    expect(view.container.textContent).toContain('0,0057');
+    view.rerender(<MoneyCount money={null} />);
+    expect(view.container.textContent).toBe('—');
   });
 });

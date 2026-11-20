@@ -20,6 +20,8 @@ export default function ProjectsPage() {
             rowKey={p => p.id}
             onRow={p => navigate('/projects/' + p.id)}
             emptyText={t('noProjects')}
+            emptyHint={t('noProjectsHint')}
+            emptyAction={<Link className="btn primary" to="/projects/new">{t('newProject')}</Link>}
             columns={[
               { label: t('name'), cell: p => <Link to={'/projects/' + p.id} onClick={e => e.stopPropagation()}>{p.name}</Link> },
               { label: t('slug'), cell: p => <span className="mono">{p.slug}</span> },

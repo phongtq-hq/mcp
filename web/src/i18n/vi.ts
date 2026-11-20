@@ -425,6 +425,10 @@ export const vi = {
   filterAllAgents: 'Mọi Agent',
   filterAllStatuses: 'Mọi trạng thái',
   noExecutionsMatch: 'Không có lần chạy nào khớp bộ lọc.',
+  noProjectsHint: 'Dự án gom Agent, workflow và các lần chạy của một nhóm việc. Tạo dự án đầu tiên để bắt đầu.',
+  noWorkflowsHint: 'Workflow là một quy trình gồm các bước Agent, bước chờ và cổng duyệt. Giao diện chưa tạo được workflow: hãy tạo qua API /v1, rồi chạy nó ở đây.',
+  noAgentsHint: 'Agent là cấu hình gồm prompt, model, tool và giới hạn. Giao diện chưa tạo được Agent: hãy tạo qua API /v1, rồi chạy nó ở tab Lần chạy.',
+  noExecutionsHint: 'Một lần chạy là một lần giao việc cho Agent. Mỗi lần chạy gọi model và có tính chi phí.',
 };
 
 export type Key = keyof typeof vi;

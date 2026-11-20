@@ -77,7 +77,7 @@ export default function ProviderPage() {
   return (
     <>
       <div className="crumbs"><Link to="/models/providers">{t('tabProviders')}</Link></div>
-      <Async query={query}>
+      <Async loading="detail" query={query}>
         {loaded => {
           const provider = loaded.data;
           const etag = loaded.etag;

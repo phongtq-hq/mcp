@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { get, soft, type Page as PageOf, type Schemas } from '@/api/client';
 import { Async } from '@/components/async';
 import { DataTable } from '@/components/data-table';
+import { Count, MoneyCount } from '@/components/count';
 import { Notice, Page, StatCard } from '@/components/ui';
 import { t, type Key } from '@/i18n';
 import { fmtMoney, fmtNumber, shortId } from '@/lib/format';
@@ -85,7 +86,7 @@ export default function CostPage() {
 
   return (
     <Page title={t('navCost')} lead={t('costLead')} actions={controls}>
-      <Async query={query}>
+      <Async query={query} loading="detail">
         {({ summary: r, lookup }) => {
           // Tỉ trọng chỉ để vẽ thanh; mọi con số tiền hiển thị là số API trả về.
           const total = Number(r.totals.estimated_cost.amount) || 0;
@@ -98,10 +99,10 @@ export default function CostPage() {
           return (
             <>
               <div className="grid">
-                <StatCard label={t('totalCost')} value={fmtMoney(r.totals.estimated_cost)} />
-                <StatCard label={t('calls')} value={fmtNumber(r.totals.calls)} hint={`${t('executions')}: ${fmtNumber(r.totals.executions)}`} />
-                <StatCard label={t('inputTokens')} value={fmtNumber(r.totals.input_tokens)} />
-                <StatCard label={t('outputTokens')} value={fmtNumber(r.totals.output_tokens)} />
+                <StatCard label={t('totalCost')} value={<MoneyCount money={r.totals.estimated_cost} />} />
+                <StatCard label={t('calls')} value={<Count value={r.totals.calls ?? 0} format={fmtNumber} />} hint={`${t('executions')}: ${fmtNumber(r.totals.executions)}`} />
+                <StatCard label={t('inputTokens')} value={<Count value={r.totals.input_tokens ?? 0} format={fmtNumber} />} />
+                <StatCard label={t('outputTokens')} value={<Count value={r.totals.output_tokens ?? 0} format={fmtNumber} />} />
               </div>
               {(r.totals.unpriced_calls ?? 0) > 0 ? <Notice kind="warn">{t('unpricedCalls', { n: fmtNumber(r.totals.unpriced_calls) })}</Notice> : null}
               {r.truncated ? <Notice kind="warn">{t('truncatedGroups')}</Notice> : null}

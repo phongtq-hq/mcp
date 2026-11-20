@@ -84,6 +84,9 @@ describe('Tab lần chạy', () => {
     client.get.mockImplementation(async (path: string) => (path.includes('/agents') ? page([agent]) : page([])));
     show(`/projects/${P}/executions`);
     expect(await screen.findByText('Chưa có lần chạy nào.')).toBeTruthy();
+    // Trạng thái rỗng nói bước tiếp theo và có luôn nút làm bước đó.
+    expect(screen.getByText(/Mỗi lần chạy gọi model và có tính chi phí/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Chạy Agent' })).toHaveLength(2);
     fireEvent.change(screen.getByLabelText('Trạng thái'), { target: { value: 'failed' } });
     expect(await screen.findByText('Không có lần chạy nào khớp bộ lọc.')).toBeTruthy();
   });

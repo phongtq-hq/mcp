@@ -20,6 +20,7 @@ export default function AgentsTab() {
           rows={r.data}
           rowKey={a => a.id}
           emptyText={t('noAgents')}
+          emptyHint={t('noAgentsHint')}
           columns={[
             { label: t('name'), cell: a => <><div>{a.name}</div>{a.description ? <div className="small muted">{a.description}</div> : null}</> },
             { label: t('slug'), cell: a => <span className="mono">{a.slug}</span> },

@@ -135,7 +135,7 @@ export default function ModelPage() {
   return (
     <>
       <div className="crumbs"><Link to="/models">{t('tabModels')}</Link></div>
-      <Async query={query}>
+      <Async loading="detail" query={query}>
         {loaded => {
           const model = loaded.data;
           const etag = loaded.etag;

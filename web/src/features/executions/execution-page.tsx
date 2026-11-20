@@ -99,7 +99,7 @@ function TaskCard({ task, steps, agents }: { task: Task; steps: Step[]; agents: 
                   <span className="spacer" />
                   {s.approval_id ? <Link to={'/approvals/' + s.approval_id} className="small">{t('approvalDetail')}</Link> : null}
                   {s.duration_ms !== null && s.duration_ms !== undefined ? <span className="small muted">{fmtNumber(s.duration_ms) + ' ms'}</span> : null}
-                  {open && loaded ? <div className="step-content"><StepContent step={loaded} /></div> : null}
+                  {open && loaded ? <div className="step-content reveal"><StepContent step={loaded} /></div> : null}
                 </li>
               );
             })}
@@ -145,7 +145,7 @@ export default function ExecutionPage() {
   useTitle(valid ? t('execution') + ' ' + shortId(id) : null);
   if (!valid) return <Navigate to="/" replace />;
   return (
-    <Async query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
+    <Async loading="detail" query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
       {({ execution: x, tasks, steps, agents }) => {
         const live = !TERMINAL.has(x.status);
         const output = messageOf(x.output);

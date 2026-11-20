@@ -24,7 +24,7 @@ export default function ProjectLayout() {
   const last = location.pathname.split('/').filter(Boolean)[2];
   const tab = TABS.some(([key]) => key === last) ? last : 'executions';
   return (
-    <Async query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
+    <Async loading="detail" query={query} back={<Link className="btn" to="/projects">{t('navProjects')}</Link>}>
       {project => (
         <>
           <div className="crumbs"><Link to="/projects">{t('navProjects')}</Link> / {project.name}</div>
