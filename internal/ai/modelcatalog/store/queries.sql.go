@@ -478,6 +478,7 @@ UPDATE models SET
   deprecated_at = COALESCE($5, deprecated_at),
   updated_at    = clock_timestamp()
 WHERE org_id = $6 AND id = $7
+  AND ($8::timestamptz IS NULL OR updated_at = $8)
 RETURNING id, org_id, provider_id, provider_model, display_name, tier, capabilities, enabled, deprecated_at, created_at, updated_at
 `
 
@@ -489,6 +490,7 @@ type UpdateModelParams struct {
 	DeprecatedAt *time.Time
 	OrgID        *uuid.UUID
 	ID           uuid.UUID
+	IfUpdatedAt  *time.Time
 }
 
 type UpdateModelRow struct {
@@ -514,6 +516,7 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Updat
 		arg.DeprecatedAt,
 		arg.OrgID,
 		arg.ID,
+		arg.IfUpdatedAt,
 	)
 	var i UpdateModelRow
 	err := row.Scan(

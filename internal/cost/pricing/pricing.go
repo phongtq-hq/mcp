@@ -102,8 +102,9 @@ const (
 	maxSchedule = 365 * 24 * time.Hour
 )
 
-func invalid(msg string) error { return apperr.New(apperr.KindUnprocessable, "validation_failed", msg) }
-func internal(err error) error { return apperr.Wrap(err, apperr.KindInternal, "internal_error", "") }
+// invalidField là lỗi validate gắn với một trường của thân request (`errors[]`).
+func invalidField(field, msg string) error { return apperr.InvalidField(field, msg) }
+func internal(err error) error             { return apperr.Wrap(err, apperr.KindInternal, "internal_error", "") }
 
 // Service chứa nghiệp vụ bảng giá. Tenant luôn lấy từ context.
 type Service struct {
@@ -117,12 +118,12 @@ func NewService(db *pgxpool.Pool, models Models) *Service { return &Service{db: 
 func validAmount(field string, v *string, required bool) error {
 	if v == nil {
 		if required {
-			return invalid(field + " là bắt buộc")
+			return invalidField(field, field+" là bắt buộc")
 		}
 		return nil
 	}
 	if !amountRe.MatchString(*v) {
-		return invalid(field + " phải là số thập phân không âm, tối đa 10 chữ số phần nguyên và 8 chữ số thập phân")
+		return invalidField(field, field+" phải là số thập phân không âm, tối đa 10 chữ số phần nguyên và 8 chữ số thập phân")
 	}
 	return nil
 }
@@ -135,7 +136,7 @@ func (s *Service) CreatePricing(ctx context.Context, modelID uuid.UUID, in Creat
 		return Pricing{}, internal(tenancy.ErrNoTenant)
 	}
 	if !currencyRe.MatchString(in.Currency) {
-		return Pricing{}, invalid("currency phải là mã 3 chữ cái in hoa, ví dụ USD")
+		return Pricing{}, invalidField("currency", "currency phải là mã 3 chữ cái in hoa, ví dụ USD")
 	}
 	for _, f := range []struct {
 		name     string
@@ -154,17 +155,21 @@ func (s *Service) CreatePricing(ctx context.Context, modelID uuid.UUID, in Creat
 	// sinh (đối soát, báo cáo) phải ra đúng con số đã dùng lúc ghi usage. Dung sai
 	// lùi chỉ để bù lệch đồng hồ; thời điểm bắt đầu thực tế do database quyết định.
 	now := time.Now()
+	// Không gửi effective_from: áp dụng ngay, theo giờ máy chủ.
+	if in.EffectiveFrom.IsZero() {
+		in.EffectiveFrom = now
+	}
 	if in.EffectiveFrom.Before(now.Add(-maxBackdate)) {
-		return Pricing{}, invalid("effective_from không được ở quá khứ: giá chỉ áp dụng từ hiện tại trở đi")
+		return Pricing{}, invalidField("effective_from", "effective_from không được ở quá khứ: giá chỉ áp dụng từ hiện tại trở đi")
 	}
 	// Dòng giá là bất biến và giá sau phải bắt đầu sau giá trước, nên một mốc quá xa
 	// sẽ khoá việc đổi giá cho tới mốc đó.
 	if in.EffectiveFrom.After(now.Add(maxSchedule)) {
-		return Pricing{}, invalid("effective_from không được xa hơn 1 năm trong tương lai")
+		return Pricing{}, invalidField("effective_from", "effective_from không được xa hơn 1 năm trong tương lai")
 	}
 	if in.Source != nil && (len(*in.Source) > maxSource ||
 		strings.ContainsFunc(*in.Source, func(r rune) bool { return unicode.IsControl(r) })) {
-		return Pricing{}, invalid("source tối đa 500 ký tự, không chứa ký tự điều khiển")
+		return Pricing{}, invalidField("source", "source tối đa 500 ký tự, không chứa ký tự điều khiển")
 	}
 	// Trước khi mở transaction: kiểm tra model dùng kết nối riêng.
 	platform, err := s.models.ModelScope(ctx, modelID)

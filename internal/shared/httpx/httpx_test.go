@@ -70,6 +70,52 @@ func TestWriteErrorDoesNotLeakInternalDetail(t *testing.T) {
 	}
 }
 
+func TestWriteErrorFieldErrors(t *testing.T) {
+	problem := func(err error) (int, map[string]any) {
+		rec := httptest.NewRecorder()
+		httpx.WriteError(rec, httptest.NewRequest("POST", "/", nil), err)
+		var p map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Code, p
+	}
+	// Lỗi validate gắn với trường: `errors[]` mang trường và thông báo; `detail` vẫn đủ nghĩa.
+	status, p := problem(apperr.InvalidField("slug", "slug phải khớp mẫu"))
+	errs, _ := p["errors"].([]any)
+	if status != 422 || p["code"] != "validation_failed" || p["detail"] != "slug phải khớp mẫu" || len(errs) != 1 {
+		t.Fatalf("status %d, problem %v", status, p)
+	}
+	if f := errs[0].(map[string]any); f["field"] != "slug" || f["message"] != "slug phải khớp mẫu" {
+		t.Errorf("errors[0] = %v", f)
+	} else if _, has := f["code"]; has {
+		t.Errorf("code rỗng không được xuất hiện: %v", f)
+	}
+	// Lỗi không có chi tiết theo trường: không có khoá `errors`.
+	if _, p := problem(apperr.New(apperr.KindUnprocessable, "validation_failed", "x")); p["errors"] != nil {
+		t.Errorf("errors phải vắng mặt: %v", p)
+	}
+	// Chi tiết theo trường không đi kèm lỗi không phải của request (409, 500).
+	conflict := apperr.New(apperr.KindConflict, "slug_taken", "đã dùng")
+	conflict.Fields = []apperr.FieldError{{Field: "slug", Message: "đã dùng"}}
+	if status, p := problem(conflict); status != 409 || p["errors"] != nil {
+		t.Errorf("409 không mang errors[]: %d %v", status, p)
+	}
+	internal := apperr.Wrap(errors.New("dsn=secret"), apperr.KindInternal, "internal_error", "x")
+	internal.Fields = []apperr.FieldError{{Field: "f", Message: "dsn=secret"}}
+	if status, p := problem(internal); status != 500 || p["errors"] != nil {
+		t.Errorf("500 không mang errors[]: %d %v", status, p)
+	}
+	// Có trần số mục.
+	many := apperr.InvalidField("f0", "m")
+	for i := 0; i < 200; i++ {
+		many.Fields = append(many.Fields, apperr.FieldError{Field: "f", Message: "m"})
+	}
+	if _, p := problem(many); len(p["errors"].([]any)) != 50 {
+		t.Errorf("trần errors[]: %d", len(p["errors"].([]any)))
+	}
+}
+
 func TestRecoverTurnsPanicInto500(t *testing.T) {
 	h := httpx.Recover(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("bí mật") }))
 	rec := httptest.NewRecorder()

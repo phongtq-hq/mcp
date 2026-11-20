@@ -91,9 +91,8 @@ var (
 	errUniqueViolated = "23505"
 )
 
-func invalid(msg string) error {
-	return apperr.New(apperr.KindUnprocessable, "validation_failed", msg)
-}
+// invalidField là lỗi validate gắn với một trường của thân request (`errors[]`).
+func invalidField(field, msg string) error { return apperr.InvalidField(field, msg) }
 
 func internal(err error) error {
 	return apperr.Wrap(err, apperr.KindInternal, "internal_error", "")
@@ -135,12 +134,12 @@ func NewService(db *pgxpool.Pool) *Service { return &Service{db: db} }
 
 func validateName(name string) error {
 	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > maxNameLen {
-		return invalid("name phải có từ 1 đến 200 ký tự")
+		return invalidField("name", "name phải có từ 1 đến 200 ký tự")
 	}
 	// Cc: ký tự điều khiển. Cf: ký tự định dạng vô hình (bidi override, zero-width)
 	// làm tên hiển thị khác với nội dung thật.
 	if strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
-		return invalid("name không được chứa ký tự điều khiển hoặc ký tự định dạng vô hình")
+		return invalidField("name", "name không được chứa ký tự điều khiển hoặc ký tự định dạng vô hình")
 	}
 	return nil
 }
@@ -150,11 +149,11 @@ func validateSettings(s json.RawMessage) error {
 		return nil
 	}
 	if len(s) > maxSettings {
-		return invalid("settings vượt giới hạn kích thước")
+		return invalidField("settings", "settings vượt giới hạn kích thước")
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(s, &obj); err != nil || obj == nil {
-		return invalid("settings phải là một JSON object")
+		return invalidField("settings", "settings phải là một JSON object")
 	}
 	// PostgreSQL jsonb không lưu được U+0000 trong chuỗi (kể cả tên khoá).
 	dec := json.NewDecoder(bytes.NewReader(s))
@@ -164,7 +163,7 @@ func validateSettings(s json.RawMessage) error {
 			break
 		}
 		if str, ok := tok.(string); ok && strings.ContainsRune(str, 0) {
-			return invalid("settings không được chứa ký tự U+0000")
+			return invalidField("settings", "settings không được chứa ký tự U+0000")
 		}
 	}
 	return nil
@@ -257,13 +256,13 @@ func (s *Service) CreateProject(ctx context.Context, in ProjectCreate) (Project,
 		return Project{}, internal(ErrNoTenant)
 	}
 	if !slugRe.MatchString(in.Slug) {
-		return Project{}, invalid("slug phải khớp ^[a-z0-9][a-z0-9-]{1,62}$")
+		return Project{}, invalidField("slug", "slug phải khớp ^[a-z0-9][a-z0-9-]{1,62}$")
 	}
 	if err := validateName(in.Name); err != nil {
 		return Project{}, err
 	}
 	if in.Environment != "prod" && in.Environment != "non_prod" {
-		return Project{}, invalid("environment phải là prod hoặc non_prod")
+		return Project{}, invalidField("environment", "environment phải là prod hoặc non_prod")
 	}
 	if err := validateSettings(in.Settings); err != nil {
 		return Project{}, err

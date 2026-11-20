@@ -1,6 +1,6 @@
 # ADR-0011: Keycloak tự vận hành làm Identity Provider
 
-Trạng thái: Đề xuất · 2026-11-17
+Trạng thái: Chấp thuận · 2026-11-19
 
 ## Bối cảnh
 

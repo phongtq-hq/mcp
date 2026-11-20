@@ -1,0 +1,64 @@
+name: release
+# Build MỘT image chứa mọi binary của platform và đẩy lên GitHub Container Registry
+# (ADR-0017). Máy chủ triển khai đúng tag này: `hqctl deploy <tag>`.
+#
+#   - push lên master        → tag là commit SHA đầy đủ (bất biến; lùi lại = deploy SHA cũ)
+#   - push tag vX.Y.Z        → thêm tag vX.Y.Z
+#
+# Không có tag `latest`: máy chủ không bao giờ kéo "bản mới nhất" một cách ngầm định.
+# Workflow này KHÔNG triển khai: triển khai là thao tác có người chạy trên máy chủ.
+on:
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: tên image
+        id: name
+        # Tên image trên ghcr.io phải viết thường.
+        run: echo "image=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: đăng nhập registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: build
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$IMAGE:$GITHUB_SHA" .
+      - name: image khởi động được (lệnh tự kiểm có trong binary)
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+        # Không có process nào đang nghe: lệnh phải thoát mã 1 (không phải lỗi "không thấy binary").
+        run: |
+          for bin in api gateway worker; do
+            code=0
+            docker run --rm "$IMAGE:$GITHUB_SHA" "/usr/local/bin/$bin" healthcheck || code=$?
+            test "$code" = 1 || { echo "$bin healthcheck thoát mã $code, muốn 1"; exit 1; }
+          done
+      - name: đẩy
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+        run: |
+          docker push "$IMAGE:$GITHUB_SHA"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:$GITHUB_REF_NAME"
+            docker push "$IMAGE:$GITHUB_REF_NAME"
+          fi
+          echo "Triển khai trên máy chủ: hqctl deploy $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

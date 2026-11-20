@@ -6,7 +6,10 @@ import { Shell } from './shell';
 
 const Overview = lazy(() => import('@/features/overview/overview-page'));
 const Projects = lazy(() => import('@/features/projects/projects-page'));
+const ProjectNew = lazy(() => import('@/features/projects/project-new-page'));
 const ProjectLayout = lazy(() => import('@/features/projects/project-layout'));
+const ProjectSettingsTab = lazy(() => import('@/features/projects/project-settings-tab'));
+const Organization = lazy(() => import('@/features/organization/organization-page'));
 const AgentsTab = lazy(() => import('@/features/agents/agents-tab'));
 const ExecutionsTab = lazy(() => import('@/features/executions/executions-tab'));
 const ExecutionPage = lazy(() => import('@/features/executions/execution-page'));
@@ -16,6 +19,11 @@ const ApprovalDetail = lazy(() => import('@/features/approvals/approval-detail-p
 const Cost = lazy(() => import('@/features/cost/cost-page'));
 const Mcp = lazy(() => import('@/features/mcp/mcp-page'));
 const Audit = lazy(() => import('@/features/audit/audit-page'));
+const Models = lazy(() => import('@/features/models/models-page'));
+const Model = lazy(() => import('@/features/models/model-page'));
+const Providers = lazy(() => import('@/features/models/providers-page'));
+const Provider = lazy(() => import('@/features/models/provider-page'));
+const Routing = lazy(() => import('@/features/models/routing-page'));
 
 export function AppRoutes() {
   return (
@@ -24,18 +32,26 @@ export function AppRoutes() {
         <Route element={<Shell />}>
           <Route index element={<Overview />} />
           <Route path="projects" element={<Projects />} />
+          <Route path="projects/new" element={<ProjectNew />} />
           <Route path="projects/:projectId" element={<ProjectLayout />}>
             <Route index element={<ExecutionsTab />} />
             <Route path="executions" element={<ExecutionsTab />} />
             <Route path="agents" element={<AgentsTab />} />
             <Route path="workflows" element={<WorkflowsTab />} />
+            <Route path="settings" element={<ProjectSettingsTab />} />
           </Route>
           <Route path="executions/:executionId" element={<ExecutionPage />} />
           <Route path="approvals" element={<Approvals />} />
           <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
           <Route path="cost" element={<Cost />} />
+          <Route path="models" element={<Models />} />
+          <Route path="models/providers" element={<Providers />} />
+          <Route path="models/providers/:providerId" element={<Provider />} />
+          <Route path="models/routing" element={<Routing />} />
+          <Route path="models/:modelId" element={<Model />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="admin/organization" element={<Organization />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

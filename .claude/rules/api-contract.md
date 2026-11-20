@@ -20,6 +20,7 @@ Nguồn: `.docs/api/openapi.yaml` (phần `info.description` chứa các quy ư�
 - **Idempotency:** mọi `POST` tạo tài nguyên hoặc kích hoạt hành động nhận `Idempotency-Key`. Cùng key cùng body trả phản hồi ban đầu; cùng key khác body trả 422. Bắt buộc với tạo execution, tạo workflow execution, quyết định approval.
 - **Đồng thời:** tài nguyên sửa được trả `ETag`; `PATCH` / `DELETE` nhận `If-Match`, lệch trả 412.
 - **Lỗi:** `application/problem+json` (RFC 9457) với `code` ổn định. 400 sai cú pháp · 401 · 403 · 404 (kể cả tài nguyên tenant khác) · 409 xung đột trạng thái · 412 · 422 sai ngữ nghĩa · 402 vượt budget · 429 kèm `Retry-After`.
+- **Lỗi validate theo trường:** lỗi 422 gắn với một trường của thân request tạo bằng `apperr.InvalidField("tên_trường", "thông báo")`; nó ra ngoài ở cả `detail` lẫn `errors[]` (`field`, `message`) để form chỉ được đúng ô. Tên trường là tên trong thân request, trường lồng nhau nối bằng dấu chấm. Không gắn `errors[]` vào lỗi không phải 400 / 422. Context viết trước quy ước này chuyển dần; code mới dùng nó ngay.
 - Tạo execution trả **202** + `execution_id`, kể cả ở Phase 1 khi vòng lặp chạy trong process `api`.
 - Phản hồi không bao giờ chứa plaintext secret; API key chỉ hiển thị một lần lúc tạo.
 - Mỗi endpoint mới có: kiểm tra quyền qua `authz` (`Require`), `audit.Record` trong cùng transaction nếu thay đổi cấu hình, và **test cross-tenant** trong `tests/api`.

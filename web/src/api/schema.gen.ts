@@ -921,7 +921,7 @@ export interface paths {
         get: operations["getModelProvider"];
         put?: never;
         post?: never;
-        /** Trả 409 nếu còn Agent Version đang hoạt động dùng model của provider */
+        /** Xoá provider không còn model nào. Trả 409 `provider_in_use` nếu provider còn model (tắt nó thay vì xoá) */
         delete: operations["deleteModelProvider"];
         options?: never;
         head?: never;
@@ -2075,8 +2075,11 @@ export interface components {
             cached_input_per_mtok?: string;
             cache_write_per_mtok?: string;
             reasoning_per_mtok?: string;
-            /** Format: date-time */
-            effective_from: string;
+            /**
+             * Format: date-time
+             * @description Thời điểm giá bắt đầu hiệu lực. Bỏ trống = ngay bây giờ theo giờ máy chủ (client không phải gửi giờ của mình, và request gửi lại có cùng thân). Không được ở quá khứ, không xa hơn một năm.
+             */
+            effective_from?: string;
             source?: string;
         };
         Budget: components["schemas"]["Timestamps"] & {
@@ -4106,7 +4109,9 @@ export interface operations {
     updateModel: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "If-Match"?: components["parameters"]["IfMatch"];
+            };
             path: {
                 modelId: components["parameters"]["ModelId"];
             };

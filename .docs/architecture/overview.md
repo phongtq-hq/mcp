@@ -156,7 +156,8 @@ Mô tả ở [agent-runtime.md §5](agent-runtime.md). Tóm tắt: Orchestrator 
 | Redis | Rate limit, bộ đếm budget tức thời, cache discovery. **Không** chứa dữ liệu không tái tạo được | 1 |
 | Temporal | Durable execution cho Agent loop, Orchestrator, workflow, approval, schedule | 2 (kéo sớm so với đề bài, xem ADR-0002) |
 | NATS JetStream | **Hoãn.** Chưa có nhu cầu mà Temporal + transactional outbox trên Postgres không đáp ứng | Khi có bằng chứng (ADR-0003) |
-| Kubernetes | Chỉ cần khi chạy isolated runtime hoặc HA nhiều node. Phase 1–3 chạy được bằng Docker Compose / một VM | 4–6 |
+| Kubernetes | Chỉ cần khi chạy isolated runtime hoặc HA nhiều node. Phase 1–3 chạy được bằng Docker Compose / một VM; cách triển khai đó ở [ADR-0017](../adr/0017-single-host-docker-compose-deployment.md) và [runbook](../runbooks/deploy-compose.md) | 4–6 |
+| Caddy | Cửa vào duy nhất của máy chủ triển khai: TLS (ACME) và định tuyến theo danh sách cho phép tới `api`, `gateway`, IdP (ADR-0017). Không có trong phát triển cục bộ | Khi triển khai |
 | OpenTelemetry + Prometheus + Grafana + Loki | Trace xuyên api → worker → gateway → MCP server từ Phase 1 | 1 |
 | KMS | Envelope encryption cho secret (ADR-0008) | 1 |
 
@@ -210,7 +211,10 @@ web/             mã nguồn giao diện web (React + TypeScript, Vite; ADR-0016
     components/  thành phần trình bày dùng chung
     lib/         tầng thấp nhất, không gọi mạng: định dạng, visible(), quy tắc hiển thị approval, lựa chọn hiển thị trong sessionStorage
     features/    mỗi màn hình một thư mục (overview, projects, agents, executions, approvals, workflows, cost, mcp, audit); feature không import lẫn nhau
-migrations/  deployments/  scripts/  tests/  .docs/
+migrations/  scripts/  tests/  .docs/
+deployments/
+  compose/       phát triển cục bộ (make up, make up-all)
+  production/    một máy chủ, staging và production (ADR-0017): compose.yaml, hq.env.example, bin/hqctl, caddy/ postgres/ temporal/ keycloak/
 ```
 
 Khác biệt so với bản tham khảo và lý do:

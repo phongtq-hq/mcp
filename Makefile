@@ -3,7 +3,7 @@ SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 OAPI := go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2
 COMPOSE := docker compose -f deployments/compose/docker-compose.yml
 
-.PHONY: build-go ui-install ui-build ui-dev ui-lint ui-test smoke up-all down-all ps-all logs-all admin image up-temporal run-worker measure run-api run-gateway run-docker-mcp run-prometheus-mcp run-loki-mcp run-kubernetes-mcp run-github-mcp up-docker-proxy dev-db build test test-short lint fmt generate generate-check up up-idp down migrate-up migrate-down migrate-status
+.PHONY: deploy-check build-go ui-install ui-build ui-dev ui-lint ui-test smoke up-all down-all ps-all logs-all admin image up-temporal run-worker measure run-api run-gateway run-docker-mcp run-prometheus-mcp run-loki-mcp run-kubernetes-mcp run-github-mcp up-docker-proxy dev-db build test test-short lint fmt generate generate-check up up-idp down migrate-up migrate-down migrate-status
 
 # Giao diện web (ADR-0016): mã nguồn React ở web/, bản build ở internal/webui/dist (được
 # nhúng vào binary api bằng go:embed). Cần Node; phiên bản phụ thuộc ghim ở web/package-lock.json.
@@ -122,7 +122,17 @@ logs-all: ## Log của api, gateway, worker, MCP server Docker (Ctrl-C để tho
 admin: ## hqadmin trong container: make admin ARGS='org create -slug acme -name Acme …'
 	@$(APPENV) $(COMPOSE) --env-file .env --profile tools run --rm hqadmin $(ARGS)
 
-# Migration chạy như một bước riêng, bằng tài khoản có quyền DDL
+# --- Triển khai một máy chủ bằng Docker Compose (ADR-0017) ------------------------------
+# File compose của máy chủ nằm ở deployments/production/ và được điều khiển TRÊN MÁY CHỦ bằng
+# deployments/production/bin/hqctl (runbook: .docs/runbooks/deploy-compose.md). Ở đây chỉ có
+# bước kiểm, chạy được trên máy lập trình viên và trong CI.
+deploy-check: ## Kiểm file compose production với file env mẫu (không khởi động gì)
+	HQ_IMAGE_TAG=check docker compose -f deployments/production/compose.yaml --env-file deployments/production/hq.env.example config -q
+	bash -n deployments/production/bin/hqctl
+	sh -n deployments/production/temporal/setup-schema.sh
+	sh -n deployments/production/temporal/init-namespace.sh
+	sh -n deployments/production/postgres/backup.sh
+
 # (HQ_MIGRATE_DATABASE_URL), không phải tài khoản của process ứng dụng.
 migrate-up:
 	go run ./cmd/migrate up

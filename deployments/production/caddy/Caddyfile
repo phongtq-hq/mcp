@@ -1,0 +1,70 @@
+# Cửa vào duy nhất của platform trên máy chủ (ADR-0017): TLS + định tuyến theo tên miền.
+# Caddy tự xin và gia hạn chứng chỉ (ACME) cho các tên miền dưới đây; không có cấu hình
+# chứng chỉ nào phải giữ tay. Chỉ container này publish cổng ra ngoài máy chủ.
+#
+# Mặc định là DANH SÁCH CHO PHÉP: đường dẫn không được nêu thì trả 404. Các đường nội bộ
+# của gateway (/mcp/internal, /llm/internal, /registry/internal) và /healthz, /readyz của
+# mọi process không bao giờ ra ngoài mạng compose.
+{
+	# "email <địa chỉ>" khi HQ_ACME_EMAIL được đặt (compose dựng dòng này); không có thì bỏ.
+	{$HQ_CADDY_ACME}
+	# Chỉ dùng khi thử trên máy không có tên miền thật: HQ_CADDY_GLOBAL="local_certs".
+	{$HQ_CADDY_GLOBAL}
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+(hardening) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	encode zstd gzip
+}
+
+# Management API và giao diện web (/ui/). CSP của giao diện do process api tự đặt.
+{$HQ_APP_DOMAIN} {
+	import hardening
+	@public path / /ui /ui/* /v1/*
+	handle @public {
+		# Luồng SSE (/v1/executions/{id}/events) được Caddy đẩy ngay theo Content-Type.
+		reverse_proxy api:8080
+	}
+	handle {
+		respond 404
+	}
+}
+
+# MCP Gateway cho client bên ngoài: chỉ endpoint MCP công khai và metadata OAuth của nó.
+{$HQ_MCP_DOMAIN} {
+	import hardening
+	@public path /mcp/v1/* /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/*
+	handle @public {
+		reverse_proxy gateway:8081
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Keycloak đi kèm (profile `idp`). Chỉ phần người dùng cuối cần: trang đăng nhập, token,
+# khoá công khai và tài nguyên tĩnh. Console quản trị KHÔNG ra Internet: vào bằng SSH
+# tunnel tới cổng loopback của máy chủ (xem runbook).
+# Không dùng Keycloak đi kèm thì để trống HQ_AUTH_DOMAIN: site này rơi về một địa chỉ http
+# trên cổng không publish, Caddy không xin chứng chỉ nào cho nó.
+{$HQ_AUTH_DOMAIN:http://idp.disabled.internal:8444} {
+	import hardening
+	@public path /realms/* /resources/*
+	handle @public {
+		reverse_proxy keycloak:8080
+	}
+	handle {
+		respond 404
+	}
+}

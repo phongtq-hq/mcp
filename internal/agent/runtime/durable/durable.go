@@ -11,9 +11,12 @@ package durable
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -828,8 +831,9 @@ var (
 	attrProject = temporal.NewSearchAttributeKeyKeyword("ProjectId")
 )
 
-// DialOptions là cách nối tới Temporal. Việc tự vận hành hay dùng dịch vụ quản lý còn
-// chưa chốt (ADR chưa có), nên phần xác thực nằm cả ở đây, không rải trong code.
+// DialOptions là cách nối tới Temporal. Tự vận hành (mTLS, CA nội bộ) hay dịch vụ quản lý
+// (API key, CA công khai) là lựa chọn lúc triển khai (ADR-0017), nên phần xác
+// thực nằm cả ở đây, không rải trong code.
 type DialOptions struct {
 	Address   string
 	Namespace string
@@ -867,25 +871,71 @@ func Dial(ctx context.Context, o DialOptions) (client.Client, error) {
 
 // DialFromEnv đọc cấu hình kết nối từ biến môi trường: HQ_TEMPORAL_ADDRESS,
 // HQ_TEMPORAL_NAMESPACE, HQ_TEMPORAL_TLS=1, HQ_TEMPORAL_TLS_CERT_FILE / _KEY_FILE
-// (mTLS), HQ_TEMPORAL_API_KEY. Ngoài local, kết nối không TLS bị từ chối: ai ghi được
+// (mTLS), HQ_TEMPORAL_TLS_CA_FILE / _SERVER_NAME (Temporal tự vận hành với CA riêng),
+// HQ_TEMPORAL_API_KEY. Ngoài local, kết nối không TLS bị từ chối: ai ghi được
 // vào Temporal thì điều khiển được worker.
 func DialFromEnv(ctx context.Context, getenv func(string) string, local bool) (client.Client, error) {
+	o, err := dialOptionsFromEnv(getenv, local)
+	if err != nil {
+		return nil, err
+	}
+	return Dial(ctx, o)
+}
+
+// maxCAFileBytes là trần kích thước file CA: một bó chứng chỉ, không phải dữ liệu tuỳ ý.
+const maxCAFileBytes = 1 << 20
+
+// dialOptionsFromEnv là phần không có mạng của DialFromEnv.
+func dialOptionsFromEnv(getenv func(string) string, local bool) (DialOptions, error) {
 	o := DialOptions{Address: getenv("HQ_TEMPORAL_ADDRESS"), Namespace: getenv("HQ_TEMPORAL_NAMESPACE"), APIKey: getenv("HQ_TEMPORAL_API_KEY")}
 	cert, key := getenv("HQ_TEMPORAL_TLS_CERT_FILE"), getenv("HQ_TEMPORAL_TLS_KEY_FILE")
-	if getenv("HQ_TEMPORAL_TLS") == "1" || cert != "" {
-		o.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+	ca, serverName := getenv("HQ_TEMPORAL_TLS_CA_FILE"), getenv("HQ_TEMPORAL_TLS_SERVER_NAME")
+	if getenv("HQ_TEMPORAL_TLS") == "1" || cert != "" || ca != "" {
+		o.TLS = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
 		if cert != "" {
 			pair, err := tls.LoadX509KeyPair(cert, key)
 			if err != nil {
-				return nil, fmt.Errorf("durable: chứng chỉ client của Temporal: %w", err)
+				return DialOptions{}, fmt.Errorf("durable: chứng chỉ client của Temporal: %w", err)
 			}
 			o.TLS.Certificates = []tls.Certificate{pair}
 		}
+		// CA riêng THAY cho kho CA của hệ thống, chỉ cho kết nối này: Temporal tự vận hành
+		// dùng CA nội bộ, và một CA công khai bất kỳ không được phép đứng ra làm Temporal.
+		if ca != "" {
+			pem, err := readLimited(ca, maxCAFileBytes)
+			if err != nil {
+				return DialOptions{}, fmt.Errorf("durable: HQ_TEMPORAL_TLS_CA_FILE: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				return DialOptions{}, errors.New("durable: HQ_TEMPORAL_TLS_CA_FILE không chứa chứng chỉ PEM nào")
+			}
+			o.TLS.RootCAs = pool
+		}
+	} else if serverName != "" {
+		return DialOptions{}, errors.New("durable: HQ_TEMPORAL_TLS_SERVER_NAME cần TLS (đặt HQ_TEMPORAL_TLS=1 hoặc HQ_TEMPORAL_TLS_CA_FILE)")
 	}
 	if o.TLS == nil && !local {
-		return nil, errors.New("durable: kết nối Temporal không TLS chỉ được phép khi HQ_ENV=local (đặt HQ_TEMPORAL_TLS=1)")
+		return DialOptions{}, errors.New("durable: kết nối Temporal không TLS chỉ được phép khi HQ_ENV=local (đặt HQ_TEMPORAL_TLS=1)")
 	}
-	return Dial(ctx, o)
+	return o, nil
+}
+
+// readLimited đọc một file cấu hình nhỏ, từ chối file lớn hơn max.
+func readLimited(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("file lớn hơn %d byte", max)
+	}
+	return b, nil
 }
 
 // NewWorker tạo worker của shared runtime. tune chỉnh tuỳ chọn (dùng trong test).

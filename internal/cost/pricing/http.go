@@ -132,10 +132,15 @@ func (h *handlers) create(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.DecodeJSON(r, &body); err != nil {
 		return err
 	}
+	// Thiếu effective_from: để giá trị không (zero), service hiểu là "ngay bây giờ".
+	var from time.Time
+	if body.EffectiveFrom != nil {
+		from = *body.EffectiveFrom
+	}
 	p, err := h.svc.CreatePricing(r.Context(), modelID, Create{
 		Currency: body.Currency, InputPerMtok: body.InputPerMtok, OutputPerMtok: body.OutputPerMtok,
 		CachedInputPerMtok: body.CachedInputPerMtok, CacheWritePerMtok: body.CacheWritePerMtok,
-		ReasoningPerMtok: body.ReasoningPerMtok, EffectiveFrom: body.EffectiveFrom, Source: body.Source})
+		ReasoningPerMtok: body.ReasoningPerMtok, EffectiveFrom: from, Source: body.Source})
 	if err != nil {
 		return err
 	}

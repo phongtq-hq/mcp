@@ -312,6 +312,7 @@ func (h *handlers) writeModel(w http.ResponseWriter, r *http.Request, status int
 	if err != nil {
 		return err
 	}
+	w.Header().Set("ETag", httpx.ETag(m.UpdatedAt))
 	httpx.WriteJSON(w, status, toAPIModel(m, priced[m.ID]))
 	return nil
 }
@@ -375,8 +376,12 @@ func (h *handlers) updateModel(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.DecodeJSON(r, &body); err != nil {
 		return err
 	}
+	ifMatch, err := httpx.IfMatch(r)
+	if err != nil {
+		return err
+	}
 	u := ModelUpdate{DisplayName: body.DisplayName, Capabilities: rawObject(body.Capabilities),
-		Enabled: body.Enabled, DeprecatedAt: body.DeprecatedAt}
+		Enabled: body.Enabled, DeprecatedAt: body.DeprecatedAt, IfUpdatedAt: ifMatch}
 	if body.Tier != nil {
 		t := string(*body.Tier)
 		u.Tier = &t

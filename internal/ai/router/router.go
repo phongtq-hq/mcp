@@ -66,7 +66,9 @@ type TierConfig struct {
 	Models []uuid.UUID `json:"models"`
 }
 
-func invalid(msg string) error { return apperr.New(apperr.KindUnprocessable, "validation_failed", msg) }
+// invalid là lỗi validate của khoá model_routing. Nó gắn với trường `settings` của thân
+// request (PATCH organization / project): thông báo đã nêu đường dẫn đầy đủ bên trong.
+func invalid(msg string) error { return apperr.InvalidField("settings", msg) }
 
 // ParseConfig đọc khoá model_routing từ settings. Settings không có khoá này trả Config rỗng.
 func ParseConfig(settings json.RawMessage) (Config, error) {

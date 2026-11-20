@@ -104,6 +104,8 @@ type ModelUpdate struct {
 	Capabilities json.RawMessage
 	Enabled      *bool
 	DeprecatedAt *time.Time
+	// IfUpdatedAt, nếu có, là thời điểm sửa cuối mà người gọi đã đọc (If-Match): lệch thì 412.
+	IfUpdatedAt *time.Time
 }
 
 // ModelFilter lọc danh sách model.
@@ -134,7 +136,10 @@ const (
 )
 
 func invalid(msg string) error { return apperr.New(apperr.KindUnprocessable, "validation_failed", msg) }
-func internal(err error) error { return apperr.Wrap(err, apperr.KindInternal, "internal_error", "") }
+
+// invalidField là lỗi validate gắn với một trường của thân request (`errors[]`).
+func invalidField(field, msg string) error { return apperr.InvalidField(field, msg) }
+func internal(err error) error             { return apperr.Wrap(err, apperr.KindInternal, "internal_error", "") }
 
 func isPg(err error, code string) bool {
 	var pgErr *pgconn.PgError
@@ -186,17 +191,17 @@ func (s *Service) checkCredential(ctx context.Context, adapter string, apiKey *s
 		return nil
 	}
 	if s.credentials == nil || s.secrets == nil {
-		return invalid("api_key: process này chưa được cấu hình để lưu secret (HQ_SECRETS_PUBLIC_KEY)")
+		return invalidField("api_key", "api_key: process này chưa được cấu hình để lưu secret (HQ_SECRETS_PUBLIC_KEY)")
 	}
 	if !s.credentials.Supports(adapter) {
-		return invalid("api_key: adapter " + adapter + " không dùng khoá do organization cung cấp")
+		return invalidField("api_key", "api_key: adapter "+adapter+" không dùng khoá do organization cung cấp")
 	}
 	err := s.credentials.Verify(ctx, adapter, *apiKey)
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrCredentialInvalid):
-		return invalid("api_key: provider từ chối khoá này; kiểm tra lại khoá và quyền của nó")
+		return invalidField("api_key", "api_key: provider từ chối khoá này; kiểm tra lại khoá và quyền của nó")
 	default:
 		// Không kết luận được khoá đúng hay sai: không lưu, và để người gọi thử lại.
 		return apperr.Wrap(err, apperr.KindUnavailable, "provider_unavailable", "không kiểm tra được api_key với provider; thử lại sau").AsRetryable()
@@ -222,14 +227,14 @@ func validateObject(field string, raw json.RawMessage) error {
 		return nil
 	}
 	if len(raw) > maxJSONBytes {
-		return invalid(field + " vượt giới hạn kích thước")
+		return invalidField(field, field+" vượt giới hạn kích thước")
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return invalid(field + " phải là một JSON object")
+		return invalidField(field, field+" phải là một JSON object")
 	}
 	if strings.Contains(string(raw), `\u0000`) {
-		return invalid(field + " không được chứa ký tự U+0000")
+		return invalidField(field, field+" không được chứa ký tự U+0000")
 	}
 	return nil
 }
@@ -268,7 +273,7 @@ func rejectSecretKeys(raw json.RawMessage) error {
 		case string:
 			if expectKey {
 				if secretKeyRe.MatchString(v) {
-					return invalid("settings không được chứa khoá, token hay mật khẩu (trường " + strconv.Quote(v) + "); bí mật phải đi qua Secrets")
+					return invalidField("settings", "settings không được chứa khoá, token hay mật khẩu (trường "+strconv.Quote(v)+"); bí mật phải đi qua Secrets")
 				}
 				expectKey = false
 				continue
@@ -291,13 +296,13 @@ func validateTier(t *string) error {
 	case "economy", "standard", "premium":
 		return nil
 	}
-	return invalid("tier phải là economy, standard hoặc premium")
+	return invalidField("tier", "tier phải là economy, standard hoặc premium")
 }
 
 // Các tính năng chưa có hạ tầng để làm an toàn bị từ chối thay vì nhận rồi bỏ qua.
 func rejectUnsupported(baseURL *string) error {
 	if baseURL != nil {
-		return invalid("base_url chưa được hỗ trợ: cần kiểm tra chống SSRF trước khi platform gọi tới URL do người dùng cung cấp")
+		return invalidField("base_url", "base_url chưa được hỗ trợ: cần kiểm tra chống SSRF trước khi platform gọi tới URL do người dùng cung cấp")
 	}
 	return nil
 }
@@ -316,10 +321,10 @@ func (s *Service) CreateProvider(ctx context.Context, in ProviderCreate) (Provid
 		return Provider{}, internal(tenancy.ErrNoTenant)
 	}
 	if !slugRe.MatchString(in.Slug) {
-		return Provider{}, invalid("slug phải khớp ^[a-z0-9][a-z0-9-]{1,62}$")
+		return Provider{}, invalidField("slug", "slug phải khớp ^[a-z0-9][a-z0-9-]{1,62}$")
 	}
 	if !slices.Contains(s.adapters, in.Adapter) {
-		return Provider{}, invalid("adapter không được hỗ trợ ở môi trường này; hỗ trợ: " + strings.Join(s.adapters, ", "))
+		return Provider{}, invalidField("adapter", "adapter không được hỗ trợ ở môi trường này; hỗ trợ: "+strings.Join(s.adapters, ", "))
 	}
 	if err := rejectUnsupported(in.BaseURL); err != nil {
 		return Provider{}, err
@@ -542,10 +547,10 @@ func (s *Service) CreateModel(ctx context.Context, in ModelCreate) (Model, error
 		return Model{}, internal(tenancy.ErrNoTenant)
 	}
 	if !providerModelRe.MatchString(in.ProviderModel) {
-		return Model{}, invalid("provider_model chỉ gồm chữ, số và các ký tự . _ : / @ -, tối đa 200 ký tự")
+		return Model{}, invalidField("provider_model", "provider_model chỉ gồm chữ, số và các ký tự . _ : / @ -, tối đa 200 ký tự")
 	}
 	if !validLabel(in.DisplayName) {
-		return Model{}, invalid("display_name phải có từ 1 đến 200 ký tự, không chứa ký tự điều khiển")
+		return Model{}, invalidField("display_name", "display_name phải có từ 1 đến 200 ký tự, không chứa ký tự điều khiển")
 	}
 	if err := validateTier(in.Tier); err != nil {
 		return Model{}, err
@@ -556,7 +561,7 @@ func (s *Service) CreateModel(ctx context.Context, in ModelCreate) (Model, error
 	p, err := s.GetProvider(ctx, in.ProviderID)
 	if err != nil {
 		if apperr.KindOf(err) == apperr.KindNotFound {
-			return Model{}, invalid("provider_id không tồn tại")
+			return Model{}, invalidField("provider_id", "provider_id không tồn tại")
 		}
 		return Model{}, err
 	}
@@ -579,7 +584,7 @@ func (s *Service) CreateModel(ctx context.Context, in ModelCreate) (Model, error
 	case isPg(err, "23505"):
 		return Model{}, errModelExists
 	case isPg(err, "23503"):
-		return Model{}, invalid("provider_id không tồn tại")
+		return Model{}, invalidField("provider_id", "provider_id không tồn tại")
 	case err != nil:
 		return Model{}, internal(err)
 	}
@@ -650,7 +655,7 @@ func (s *Service) UpdateModel(ctx context.Context, id uuid.UUID, u ModelUpdate) 
 		return Model{}, internal(tenancy.ErrNoTenant)
 	}
 	if u.DisplayName != nil && !validLabel(*u.DisplayName) {
-		return Model{}, invalid("display_name phải có từ 1 đến 200 ký tự, không chứa ký tự điều khiển")
+		return Model{}, invalidField("display_name", "display_name phải có từ 1 đến 200 ký tự, không chứa ký tự điều khiển")
 	}
 	if err := validateTier(u.Tier); err != nil {
 		return Model{}, err
@@ -669,7 +674,7 @@ func (s *Service) UpdateModel(ctx context.Context, id uuid.UUID, u ModelUpdate) 
 	err = tenancy.InTx(ctx, s.db, func(tx pgxv5.Tx) (err error) {
 		row, err = store.New(tx).UpdateModel(ctx, store.UpdateModelParams{
 			OrgID: &orgID, ID: id, DisplayName: u.DisplayName, Tier: u.Tier, Capabilities: u.Capabilities,
-			Enabled: u.Enabled, DeprecatedAt: u.DeprecatedAt})
+			Enabled: u.Enabled, DeprecatedAt: u.DeprecatedAt, IfUpdatedAt: u.IfUpdatedAt})
 		if err != nil {
 			return err
 		}
@@ -686,6 +691,10 @@ func (s *Service) UpdateModel(ctx context.Context, id uuid.UUID, u ModelUpdate) 
 			Outcome: audit.OutcomeSuccess, Details: map[string]string{"fields": strings.Join(fields, ",")}})
 	})
 	if errors.Is(err, pgxv5.ErrNoRows) {
+		// Model đã được GetModel xác nhận là có: không khớp dòng nào nghĩa là ETag lệch.
+		if u.IfUpdatedAt != nil {
+			return Model{}, httpx.ErrPreconditionFailed
+		}
 		return Model{}, errNotFound
 	}
 	if err != nil {

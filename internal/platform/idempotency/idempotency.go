@@ -14,6 +14,8 @@
 // execution) phải hoàn tất key trong cùng transaction trước khi dùng package này.
 //
 // Không bọc endpoint trả secret một lần: phản hồi được lưu trong database.
+// Endpoint NHẬN secret (ví dụ `api_key` của model provider) thì bọc được: thân request
+// không được lưu, chỉ băm SHA-256 của nó (request_hash), và phản hồi không chứa secret.
 package idempotency
 
 import (

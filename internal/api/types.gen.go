@@ -2321,14 +2321,16 @@ type ModelPricingScope string
 
 // ModelPricingCreate defines model for ModelPricingCreate.
 type ModelPricingCreate struct {
-	CacheWritePerMtok  *string   `json:"cache_write_per_mtok,omitempty"`
-	CachedInputPerMtok *string   `json:"cached_input_per_mtok,omitempty"`
-	Currency           string    `json:"currency"`
-	EffectiveFrom      time.Time `json:"effective_from"`
-	InputPerMtok       string    `json:"input_per_mtok"`
-	OutputPerMtok      string    `json:"output_per_mtok"`
-	ReasoningPerMtok   *string   `json:"reasoning_per_mtok,omitempty"`
-	Source             *string   `json:"source,omitempty"`
+	CacheWritePerMtok  *string `json:"cache_write_per_mtok,omitempty"`
+	CachedInputPerMtok *string `json:"cached_input_per_mtok,omitempty"`
+	Currency           string  `json:"currency"`
+
+	// EffectiveFrom Thời điểm giá bắt đầu hiệu lực. Bỏ trống = ngay bây giờ theo giờ máy chủ (client không phải gửi giờ của mình, và request gửi lại có cùng thân). Không được ở quá khứ, không xa hơn một năm.
+	EffectiveFrom    *time.Time `json:"effective_from,omitempty"`
+	InputPerMtok     string     `json:"input_per_mtok"`
+	OutputPerMtok    string     `json:"output_per_mtok"`
+	ReasoningPerMtok *string    `json:"reasoning_per_mtok,omitempty"`
+	Source           *string    `json:"source,omitempty"`
 }
 
 // ModelProvider defines model for ModelProvider.
@@ -3203,6 +3205,11 @@ type ListModelsParams struct {
 // CreateModelParams defines parameters for CreateModel.
 type CreateModelParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateModelParams defines parameters for UpdateModel.
+type UpdateModelParams struct {
+	IfMatch *IfMatch `json:"If-Match,omitempty"`
 }
 
 // ListModelPricingParams defines parameters for ListModelPricing.

@@ -1,7 +1,8 @@
 name: ci
 on:
   push:
-    branches: [main]
+    # Nhánh mặc định của repo là master; main được giữ để đổi tên nhánh không làm CI im lặng.
+    branches: [master, main]
   pull_request:
 
 permissions:
@@ -30,6 +31,10 @@ jobs:
       # Cả phụ thuộc lúc build: công cụ build sinh ra chính bundle chạy trên origin giữ token.
       - name: giao diện — phụ thuộc (lúc chạy và lúc build) không có lỗ hổng mức cao
         run: cd web && npm audit --audit-level=high
+      # File compose của máy chủ (ADR-0017) phải luôn hợp lệ với file env mẫu: lỗi cú pháp ở
+      # đây chỉ lộ ra lúc triển khai nếu không kiểm sớm.
+      - name: cấu hình triển khai (docker compose config)
+        run: make deploy-check
       - name: gofmt
         run: test -z "$(gofmt -l cmd internal migrations tests)"
       - name: go.mod gọn

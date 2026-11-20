@@ -1,0 +1,4 @@
+# Dynamic config của Temporal đi kèm (ADR-0017). Để trống là dùng mặc định của server.
+# Thêm khoá ở đây khi có số đo cho thấy cần (trần RPS theo namespace, kích thước lịch sử…);
+# Temporal đọc lại file này định kỳ, không cần khởi động lại.
+{}
