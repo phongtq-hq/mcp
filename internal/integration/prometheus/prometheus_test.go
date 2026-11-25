@@ -163,25 +163,23 @@ func fakePrometheus(rec *recorder) http.Handler {
 }
 
 var (
-	testKey = []byte(strings.Repeat("k", 32))
-	testOrg = uuid.New()
+	testSigner = contract.TestSigner()
+	testOrg    = uuid.New()
 )
 
+// headerTransport ký mỗi request như Gateway trên tuyến execution (contract.ExecutionTransport).
 type headerTransport struct{ signer *signedctx.Signer }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(signedctx.Header, h.signer.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: prometheus.Slug,
-		OrgID: testOrg, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}, time.Now()))
-	return http.DefaultTransport.RoundTrip(r)
+	return contract.ExecutionTransport(h.signer, prometheus.Slug, testOrg, nil).RoundTrip(r)
 }
 
 // connect dựng server MCP trên client đã cho và nối một MCP client thật vào, với ngữ
 // cảnh ký của org sở hữu.
 func connect(t *testing.T, client *prometheus.Client) *mcp.ClientSession {
 	t.Helper()
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(prometheus.Handler(client, signer, testOrg))
+	signer := testSigner
+	srv := httptest.NewServer(prometheus.Handler(client, signer.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -265,25 +263,25 @@ const (
 // Bộ test hợp đồng dùng chung của managed MCP server (mcp-platform §7).
 func TestContract(t *testing.T) {
 	client, rec := newFake(t)
-	signer, _ := signedctx.NewSigner(testKey)
+	signer := testSigner
 	contract.Run(t, contract.Server{
 		Slug:           prometheus.Slug,
-		Handler:        prometheus.Handler(client, signer, testOrg),
-		SigningKey:     testKey,
+		Handler:        prometheus.Handler(client, signer.Verifier(), testOrg),
+		Signer:         signer,
 		OrgID:          testOrg,
 		TargetRequests: rec.count,
 		Tools: []contract.Tool{
-			{Name: "query_instant", MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
+			{Name: "query_instant", Direct: true, MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
 				{"query": "up"}, {"query": "42", "time": "2026-11-18T08:00:00Z"},
 				{"query": "many", "limit": 200}, {"query": "wide[1h]", "limit": 200}}},
-			{Name: "query_range", MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
+			{Name: "query_range", Direct: true, MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
 				{"query": "rate(http_requests_total[5m])", "start": rangeStart, "end": rangeEnd, "step_seconds": 60},
 				{"query": "rate(http_requests_total[5m])", "start": rangeStart, "end": rangeEnd, "step_seconds": 10, "limit": 50}}},
-			{Name: "list_alerts", MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
+			{Name: "list_alerts", Direct: true, MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
 				{}, {"state": "firing", "limit": 200}}},
-			{Name: "list_targets", MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
+			{Name: "list_targets", Direct: true, MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
 				{}, {"health": "down", "scrape_pool": "api"}}},
-			{Name: "list_metric_names", MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
+			{Name: "list_metric_names", Direct: true, MaxResultBytes: prometheus.MaxResultBytes, Samples: []map[string]any{
 				{}, {"prefix": "node_", "limit": 500}, {"limit": 500, "offset": 1000}}},
 		},
 	})

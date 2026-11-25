@@ -46,7 +46,7 @@ flowchart LR
    sudo install -m 600 /opt/hq/deployments/production/hq.env.example /etc/hq/hq.env
    ```
 
-   Điền từng biến theo chú thích trong file. Khoá và mật khẩu: `openssl rand -hex 32`. Ba khoá `HQ_EXECUTION_TOKEN_KEY`, `HQ_SERVICE_TOKEN_KEY`, `HQ_SERVICE_SIGNING_KEY` phải khác nhau (process từ chối khởi động nếu trùng).
+   Điền từng biến theo chú thích trong file. Khoá và mật khẩu: `openssl rand -hex 32`. Hai khoá `HQ_EXECUTION_TOKEN_KEY`, `HQ_SERVICE_TOKEN_KEY` phải khác nhau và khác `HQ_SERVICE_SIGNING_KEY` (process từ chối khởi động nếu trùng). `HQ_SERVICE_SIGNING_KEY` là khoá ký Ed25519 (ADR-0018): tạo bằng `bin/hqctl admin service-key init -out /tmp/sk` (hoặc `hqadmin service-key init` trên máy khác), chép seed trong file vào `HQ_SERVICE_SIGNING_KEY`, khoá công khai in ra vào `HQ_SERVICE_VERIFY_KEY`, rồi xoá file tạm. Managed MCP server chỉ nhận khoá công khai.
 5. Khoá gốc của Secrets (**chỉ staging**; ở production provider cục bộ bị từ chối, [ADR-0012](../adr/0012-local-key-provider-before-cloud-kms.md)):
 
    ```sh

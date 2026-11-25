@@ -27,7 +27,6 @@ import (
 	"github.com/hqgroups/mcp/internal/agent/runtime/durable"
 	"github.com/hqgroups/mcp/internal/ai/provider"
 	"github.com/hqgroups/mcp/internal/mcp/registry"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // Cùng digest với deployments/compose/docker-compose.yml.
@@ -127,7 +126,7 @@ func TestDurableExecutions(t *testing.T) {
 	e := setup(t, true)
 	ctx := context.Background()
 	adminA := e.tok("admin-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

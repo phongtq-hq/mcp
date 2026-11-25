@@ -41,7 +41,6 @@ import (
 	"github.com/hqgroups/mcp/internal/runtimewire"
 	"github.com/hqgroups/mcp/internal/shared/ids"
 	"github.com/hqgroups/mcp/internal/shared/safehttp"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 	"github.com/hqgroups/mcp/internal/testutil/pgtest"
 	"github.com/hqgroups/mcp/internal/workflow/definitions/schedule"
 )
@@ -182,7 +181,7 @@ func setup(t *testing.T, durableRuntime ...bool) *env {
 		t.Fatalf("verifier: %v", err)
 	}
 	// Gateway thật (role app_gateway) cho đường tool call của Agent Runtime.
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	gwMux := http.NewServeMux()
 	e.gw = httptest.NewServer(gwMux)
 	t.Cleanup(e.gw.Close)

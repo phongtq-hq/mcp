@@ -28,7 +28,7 @@ PromQL là ngôn ngữ truy vấn chỉ đọc, nhưng `query_instant` / `query_
 |---|---|---|
 | `HQ_PROMETHEUS_URL` | Có | Địa chỉ gốc của Prometheus, ví dụ `http://prometheus:9090` (kèm route prefix nếu có). Không được chứa credential, query hay fragment |
 | `HQ_PROMETHEUS_ORG_ID` | Có | Id của organization sở hữu Prometheus này. Tool call thay mặt org khác bị từ chối |
-| `HQ_SERVICE_SIGNING_KEY` | Có | Khoá ký ngữ cảnh dùng chung với Gateway (hex, ≥ 32 byte) |
+| `HQ_SERVICE_VERIFY_KEY` | Có | Khoá CÔNG KHAI kiểm ngữ cảnh của Gateway (Ed25519, hex 64 ký tự; `hqadmin service-key public`). Server từ chối khởi động nếu được cấp `HQ_SERVICE_SIGNING_KEY` (ADR-0018) |
 | `HQ_PROMETHEUS_BEARER_TOKEN_FILE` | Không | Đường dẫn file chứa bearer token gửi cho Prometheus. Có token thì `HQ_PROMETHEUS_URL` bắt buộc là `https` |
 | `HQ_HTTP_ADDR` | Không | Địa chỉ lắng nghe, mặc định `:8091` (`make run-prometheus-mcp` lấy từ `HQ_PROMETHEUS_MCP_HTTP_ADDR`) |
 | `HQ_ENV` | Có | `local`, `staging` hoặc `production` |
@@ -82,7 +82,7 @@ Lý do: mọi tool chỉ `GET`, không đổi trạng thái Prometheus (`read` /
 |---|---|---|
 | Process không khởi động: `HQ_PROMETHEUS_URL is required` / `HQ_PROMETHEUS_ORG_ID is required` | Thiếu cấu hình | Đặt biến ở mục 2 |
 | Process không khởi động: `bearer token chỉ được gửi qua https` | Có file token nhưng URL là `http` | Dùng `https`, hoặc bỏ token nếu Prometheus không cần |
-| Gateway nhận 401 từ server | Khoá ký khác nhau giữa Gateway và server, đồng hồ lệch quá 30 giây, hoặc slug đăng ký không phải `prometheus` | Đối chiếu `HQ_SERVICE_SIGNING_KEY`, NTP, slug |
+| Gateway nhận 401 từ server | Khoá công khai không ứng với khoá ký của Gateway, đồng hồ lệch quá 30 giây, header bị dùng lại hoặc body bị sửa sau khi ký, hoặc slug đăng ký không phải `prometheus` | Đối chiếu `hqadmin service-key public` với `HQ_SERVICE_VERIFY_KEY`, NTP, slug |
 | Gateway nhận 403 từ server | Tool call thay mặt org khác `HQ_PROMETHEUS_ORG_ID` | Đăng ký server ở đúng org; không đăng ký ở phạm vi platform |
 | Tool lỗi `không gọi được Prometheus API` | Prometheus không tới được, TLS lỗi, hoặc quá 25 giây | Xem log của process (`prometheus api: request lỗi`); log không chứa biểu thức PromQL hay token |
 | Tool lỗi `prometheus từ chối credential của server` | Prometheus trả 401 / 403 | Kiểm file token và quyền của nó |

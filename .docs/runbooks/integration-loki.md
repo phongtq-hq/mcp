@@ -51,7 +51,7 @@ Server chỉ gửi `GET` tới `/loki/api/v1/query_range`, `/loki/api/v1/labels`
 |---|---|---|
 | `HQ_LOKI_URL` | Có | Địa chỉ gốc của Loki (query frontend hoặc gateway của Loki), ví dụ `https://loki.example:3100` (kèm path prefix nếu có). Không được chứa credential, query hay fragment. **Bắt buộc `https` khi có bearer token hoặc khi `HQ_ENV` không phải `local`** |
 | `HQ_LOKI_ORG_ID` | Có | Id của organization (của MCP Platform) sở hữu Loki này. Tool call thay mặt org khác bị từ chối |
-| `HQ_SERVICE_SIGNING_KEY` | Có | Khoá ký ngữ cảnh dùng chung với Gateway (hex, ≥ 32 byte) |
+| `HQ_SERVICE_VERIFY_KEY` | Có | Khoá CÔNG KHAI kiểm ngữ cảnh của Gateway (Ed25519, hex 64 ký tự; `hqadmin service-key public`). Server từ chối khởi động nếu được cấp `HQ_SERVICE_SIGNING_KEY` (ADR-0018) |
 | `HQ_LOKI_BEARER_TOKEN_FILE` | Không | Đường dẫn file chứa bearer token gửi cho Loki (hoặc proxy xác thực đứng trước nó): đúng một token trên một dòng. File rỗng, toàn khoảng trắng, nhiều dòng hoặc có ký tự điều khiển làm process từ chối khởi động |
 | `HQ_LOKI_TENANT_ID` | Không | Tenant của Loki, gửi trong header `X-Scope-OrgID` ở mọi request. Bắt buộc nếu Loki chạy `auth_enabled: true` (mặc định của Loki). Chữ, số và `!-_.*'()`, tối đa 150 ký tự. Có `\|` (nhiều tenant) thì bị từ chối trừ khi bật cờ dưới đây |
 | `HQ_LOKI_ALLOW_MULTI_TENANT` | Không | `1` cho phép `HQ_LOKI_TENANT_ID` chứa nhiều tenant ngăn bằng `\|` (truy vấn liên tenant). Mặc định tắt; chỉ nhận `1` hoặc `0` |
@@ -139,7 +139,7 @@ Lý do:
 | Process không khởi động: `HQ_LOKI_URL is required` / `HQ_LOKI_ORG_ID is required` | Thiếu cấu hình | Đặt biến ở mục 2 |
 | Process không khởi động: `bearer token chỉ được gửi qua https` / `ngoài môi trường local địa chỉ API phải là https` | URL là `http` trong khi có token hoặc `HQ_ENV` không phải `local` | Dùng `https` |
 | Process không khởi động: `tenant id không hợp lệ` | `HQ_LOKI_TENANT_ID` có ký tự ngoài tập cho phép | Sửa giá trị; nếu Loki thật sự dùng tenant id có ký tự khác, báo lại để nới regex có chủ ý |
-| Gateway nhận 401 từ server | Khoá ký khác nhau giữa Gateway và server, đồng hồ lệch quá 30 giây, hoặc slug đăng ký không phải `loki` | Đối chiếu `HQ_SERVICE_SIGNING_KEY`, NTP, slug |
+| Gateway nhận 401 từ server | Khoá công khai không ứng với khoá ký của Gateway, đồng hồ lệch quá 30 giây, header bị dùng lại hoặc body bị sửa sau khi ký, hoặc slug đăng ký không phải `loki` | Đối chiếu `hqadmin service-key public` với `HQ_SERVICE_VERIFY_KEY`, NTP, slug |
 | Gateway nhận 403 từ server | Tool call thay mặt org khác `HQ_LOKI_ORG_ID` | Đăng ký server ở đúng org; không đăng ký ở phạm vi platform |
 | Tool lỗi `không gọi được Loki API` | Loki không tới được, TLS lỗi, hoặc quá 25 giây | Xem log của process (`loki api: request lỗi`); log không chứa biểu thức LogQL, dòng log hay token |
 | Tool lỗi `loki từ chối credential của server` | Loki / proxy trả 401 hoặc 403 (thường là thiếu hoặc sai `HQ_LOKI_TENANT_ID`, hoặc token) | Kiểm tenant, file token và quyền của nó |

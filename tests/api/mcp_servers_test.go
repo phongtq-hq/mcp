@@ -352,7 +352,7 @@ func TestTenantMCPServers(t *testing.T) {
 		}
 
 		// Managed server của org (đăng ký qua đường quản trị) không sửa được qua API tenant.
-		signer, _ := signedctx.NewSigner(signingKey)
+		signer := testSigner
 		conn, err := e.db.Admin.Acquire(ctx)
 		if err != nil {
 			t.Fatal(err)

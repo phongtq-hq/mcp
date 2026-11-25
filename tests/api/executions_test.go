@@ -15,7 +15,6 @@ import (
 	"github.com/hqgroups/mcp/internal/adminops"
 	"github.com/hqgroups/mcp/internal/ai/provider"
 	"github.com/hqgroups/mcp/internal/shared/exectoken"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 func toolUse(names ...string) provider.Response {
@@ -35,7 +34,7 @@ func TestExecutions(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	adminA, adminB, viewerA := e.tok("admin-a"), e.tok("admin-b"), e.tok("viewer-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -426,6 +425,20 @@ func TestExecutions(t *testing.T) {
 			want(t, e.do("GET", path, adminB, nil, nil), 404, "not_found")
 			want(t, e.do("GET", path, e.tok("norole-a"), nil, nil), 404, "not_found")
 			want(t, e.do("GET", path, viewerA, nil, nil), 200, "")
+		}
+		// Người chỉ có execution:read thấy trạng thái nhưng không thấy nội dung (input, output,
+		// goal): câu trả lời của Agent có thể trích dữ liệu nhạy cảm nó đã đọc.
+		if x := e.do("GET", "/v1/executions/"+doneID, viewerA, nil, nil).json(t); x["output"] != nil || x["input"] != nil || x["status"] == nil {
+			t.Errorf("viewer thấy nội dung execution: %v", x)
+		}
+		if x := e.do("GET", "/v1/executions/"+doneID, adminA, nil, nil).json(t); x["output"] == nil || x["input"] == nil {
+			t.Errorf("người có execution:read_content phải thấy nội dung: %v", x)
+		}
+		for _, path := range []string{"/v1/tasks/" + taskID, "/v1/executions/" + doneID + "/tasks", "/v1/projects/" + projA + "/executions"} {
+			if body := string(e.do("GET", path, viewerA, nil, nil).body); strings.Contains(body, `"output":{`) || strings.Contains(body, `"input":{`) ||
+				strings.Contains(body, `"output_summary":"`) || strings.Contains(body, "Container nào") {
+				t.Errorf("%s lộ nội dung cho viewer: %.400s", path, body)
+			}
 		}
 		// Danh sách: phân trang keyset, lọc trạng thái, không lẫn project khác.
 		list := e.do("GET", "/v1/projects/"+projA+"/executions?limit=2", adminA, nil, nil).json(t)

@@ -25,7 +25,7 @@ func TestLoadSettings(t *testing.T) {
 		"HQ_KUBERNETES_ORG_ID":            uuid.NewString(),
 		"HQ_KUBERNETES_NAMESPACES":        "prod,default",
 		"HQ_KUBERNETES_BEARER_TOKEN_FILE": token,
-		"HQ_SERVICE_SIGNING_KEY":          strings.Repeat("ab", 32),
+		"HQ_SERVICE_VERIFY_KEY":           strings.Repeat("ab", 32),
 	}
 	load := func(env string, override map[string]string) (settings, error) {
 		vars := map[string]string{}
@@ -39,7 +39,7 @@ func TestLoadSettings(t *testing.T) {
 	}
 
 	cfg, err := load("production", nil)
-	if err != nil || cfg.client == nil || cfg.signer == nil || strings.Join(cfg.namespaces, ",") != "default,prod" || !strings.HasPrefix(cfg.scope, "2 namespace") {
+	if err != nil || cfg.client == nil || cfg.verifier == nil || strings.Join(cfg.namespaces, ",") != "default,prod" || !strings.HasPrefix(cfg.scope, "2 namespace") {
 		t.Fatalf("cấu hình hợp lệ: %+v %v", cfg.scope, err)
 	}
 	cfg, err = load("production", map[string]string{"HQ_KUBERNETES_NAMESPACES": "*"})
@@ -71,7 +71,8 @@ func TestLoadSettings(t *testing.T) {
 		"http ngoài local":       {"staging", map[string]string{"HQ_KUBERNETES_URL": "http://kube:8080", "HQ_KUBERNETES_BEARER_TOKEN_FILE": ""}, "https"},
 		"token qua http ở local": {"local", map[string]string{"HQ_KUBERNETES_URL": "http://kube:8080"}, "https"},
 		"CA không phải PEM":      {"production", map[string]string{"HQ_KUBERNETES_CA_FILE": token}, "CA"},
-		"thiếu khoá ký":          {"production", map[string]string{"HQ_SERVICE_SIGNING_KEY": ""}, "HQ_SERVICE_SIGNING_KEY"},
+		"thiếu khoá kiểm":        {"production", map[string]string{"HQ_SERVICE_VERIFY_KEY": ""}, "HQ_SERVICE_VERIFY_KEY"},
+		"được cấp khoá ký":       {"production", map[string]string{"HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32)}, "HQ_SERVICE_SIGNING_KEY"},
 	} {
 		_, err := load(tc.env, tc.override)
 		switch {

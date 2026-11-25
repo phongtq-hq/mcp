@@ -279,25 +279,23 @@ func fakeKube(rec *recorder) http.Handler {
 }
 
 var (
-	testKey = []byte(strings.Repeat("k", 32))
-	testOrg = uuid.New()
+	testSigner = contract.TestSigner()
+	testOrg    = uuid.New()
 )
 
+// headerTransport ký mỗi request như Gateway trên tuyến execution (contract.ExecutionTransport).
 type headerTransport struct{ signer *signedctx.Signer }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(signedctx.Header, h.signer.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: kubernetes.Slug,
-		OrgID: testOrg, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}, time.Now()))
-	return http.DefaultTransport.RoundTrip(r)
+	return contract.ExecutionTransport(h.signer, kubernetes.Slug, testOrg, nil).RoundTrip(r)
 }
 
 // connect dựng server MCP trên client đã cho và nối một MCP client thật vào, với ngữ
 // cảnh ký của org sở hữu.
 func connect(t *testing.T, client *kubernetes.Client) *mcp.ClientSession {
 	t.Helper()
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(kubernetes.Handler(client, signer, testOrg))
+	signer := testSigner
+	srv := httptest.NewServer(kubernetes.Handler(client, signer.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -382,28 +380,28 @@ type listOut struct {
 // Bộ test hợp đồng dùng chung của managed MCP server (mcp-platform §7).
 func TestContract(t *testing.T) {
 	client, rec := newFake(t)
-	signer, _ := signedctx.NewSigner(testKey)
+	signer := testSigner
 	maxBytes := kubernetes.MaxResultBytes
 	contract.Run(t, contract.Server{
 		Slug:           kubernetes.Slug,
-		Handler:        kubernetes.Handler(client, signer, testOrg),
-		SigningKey:     testKey,
+		Handler:        kubernetes.Handler(client, signer.Verifier(), testOrg),
+		Signer:         signer,
 		OrgID:          testOrg,
 		TargetRequests: rec.count,
 		Tools: []contract.Tool{
-			{Name: "list_namespaces", MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 40}}},
-			{Name: "list_pods", MaxResultBytes: maxBytes, Samples: []map[string]any{
+			{Name: "list_namespaces", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 40}}},
+			{Name: "list_pods", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{
 				{"namespace": "prod"}, {"namespace": "prod", "limit": 40, "label_selector": "app=web,!canary,tier!=cache"},
 				{"namespace": "wide", "limit": 40}}},
-			{Name: "get_pod", MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "default", "name": "api-0"}}},
+			{Name: "get_pod", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "default", "name": "api-0"}}},
 			{Name: "get_pod_logs", MaxResultBytes: maxBytes, Samples: []map[string]any{
 				{"namespace": "default", "pod": "api-0"},
 				{"namespace": "default", "pod": "noisy", "container": "app", "tail_lines": 1000, "since_seconds": 3600, "previous": true}}},
-			{Name: "list_deployments", MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "prod"}, {"namespace": "prod", "limit": 40}}},
-			{Name: "get_deployment", MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "prod", "name": "web"}}},
+			{Name: "list_deployments", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "prod"}, {"namespace": "prod", "limit": 40}}},
+			{Name: "get_deployment", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{"namespace": "prod", "name": "web"}}},
 			{Name: "list_events", MaxResultBytes: maxBytes, Samples: []map[string]any{
 				{"namespace": "default"}, {"namespace": "default", "involved_kind": "Pod", "involved_name": "api-0", "type": "Warning", "limit": 40}}},
-			{Name: "list_nodes", MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 40}}},
+			{Name: "list_nodes", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 40}}},
 		},
 	})
 }

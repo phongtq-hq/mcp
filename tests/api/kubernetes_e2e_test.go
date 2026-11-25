@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +16,8 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 
 	"github.com/hqgroups/mcp/internal/adminops"
+	"github.com/hqgroups/mcp/internal/integration/contract"
 	"github.com/hqgroups/mcp/internal/integration/kubernetes"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // k3sImage: cluster Kubernetes một node dùng cho test đầu-cuối. Đổi bằng HQ_TEST_K3S_IMAGE.
@@ -91,14 +92,14 @@ func TestKubernetesEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	connect := func(slugSuffix string, namespaces []string) func(string, map[string]any) (string, bool) {
 		t.Helper()
 		client, err := kubernetes.NewClient(endpoint, kubernetes.Options{BearerToken: token, CAPEM: []byte(ca), Namespaces: namespaces})
 		if err != nil {
 			t.Fatal(err)
 		}
-		up := httptest.NewServer(kubernetes.Handler(client, signer, e.orgA))
+		up := httptest.NewServer(kubernetes.Handler(client, signer.Verifier(), e.orgA))
 		t.Cleanup(up.Close)
 		if slugSuffix == "" {
 			conn, err := e.db.Admin.Acquire(ctx)
@@ -121,11 +122,30 @@ func TestKubernetesEndToEnd(t *testing.T) {
 			t.Fatalf("connect: %v", err)
 		}
 		t.Cleanup(func() { _ = sess.Close() })
+		// Tool ngoài kubernetes.DirectTools (log, event) chỉ chạy trong execution: gọi server
+		// bằng đúng ngữ cảnh Gateway ký trên tuyến execution (đường execution → Gateway có test
+		// riêng ở TestPricingEngineEndToEnd), sau khi khẳng định Gateway từ chối gọi trực tiếp.
+		execSess, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{
+			Endpoint: up.URL, HTTPClient: &http.Client{Transport: contract.ExecutionTransport(signer, kubernetes.Slug, e.orgA, nil)},
+			DisableStandaloneSSE: true, MaxRetries: -1,
+		}, nil)
+		if err != nil {
+			t.Fatalf("connect (execution): %v", err)
+		}
+		t.Cleanup(func() { _ = execSess.Close() })
 		return func(name string, args map[string]any) (string, bool) {
 			t.Helper()
 			res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "kubernetes." + name, Arguments: args})
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
+			}
+			if !slices.Contains(kubernetes.DirectTools, name) {
+				if !res.IsError {
+					t.Errorf("%s gọi trực tiếp qua Gateway được chấp nhận", name)
+				}
+				if res, err = execSess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args}); err != nil {
+					t.Fatalf("%s (execution): %v", name, err)
+				}
 			}
 			var b strings.Builder
 			for _, c := range res.Content {

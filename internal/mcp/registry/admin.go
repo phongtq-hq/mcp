@@ -79,6 +79,10 @@ type ApplyResult struct {
 	// LockedTools: tool của version đang hoạt động bị tạm khoá vì định nghĩa của
 	// chúng đã đổi hoặc biến mất ở phía server.
 	LockedTools []string
+	// KeptDisabled: tool của managed server có định nghĩa đổi nhưng vẫn TẮT ở version
+	// mới vì người vận hành đã tắt nó (hoặc nó đang bị khoá bởi một version chờ duyệt
+	// trước đó). Bật lại bằng `hqadmin mcp-tool classify -enabled=true` nếu muốn.
+	KeptDisabled []string
 }
 
 type policy struct {
@@ -86,6 +90,16 @@ type policy struct {
 	risk, sideEffect, sensitivity string
 	egress, cacheable             bool
 	timeoutMs, maxResultBytes     int32
+}
+
+var sensitivityRank = map[string]int{"public": 0, "internal": 1, "sensitive": 2}
+
+// stricterSensitivity trả về mức phân loại dữ liệu chặt hơn trong hai mức.
+func stricterSensitivity(a, b string) string {
+	if sensitivityRank[a] >= sensitivityRank[b] {
+		return a
+	}
+	return b
 }
 
 // Mặc định an toàn nhất: tool mới phát hiện không dùng được cho tới khi được phân loại.
@@ -159,15 +173,36 @@ func ApplyDiscovery(ctx context.Context, tx pgxv5.Tx, orgID *uuid.UUID, slug str
 	for _, t := range snap.Tools {
 		current[t.Name] = t.Hash
 		p := safestPolicy
-		if old, ok := prev[t.Name]; ok && bytes.Equal(old.DefinitionHash, t.Hash) {
+		old, existed := prev[t.Name]
+		switch {
+		case existed && bytes.Equal(old.DefinitionHash, t.Hash):
 			// Định nghĩa không đổi: giữ nguyên phân loại đã có.
 			p = policy{enabled: old.Enabled, risk: old.RiskLevel, sideEffect: old.SideEffect, sensitivity: old.DataSensitivity,
 				egress: old.Egress, cacheable: old.Cacheable, timeoutMs: old.TimeoutMs, maxResultBytes: old.MaxResultBytes}
-		} else if srv.Kind == KindManaged && t.ReadOnlyHint {
+		case srv.Kind == KindManaged && t.ReadOnlyHint:
 			// Managed server là code của chính platform, đã qua review và test hợp đồng:
-			// tool nó khai là chỉ đọc được phân loại read và bật sẵn. Annotation của
+			// tool MỚI nó khai là chỉ đọc được phân loại read và bật sẵn. Annotation của
 			// server ngoài không bao giờ được tin theo cách này.
 			p.enabled, p.risk, p.sideEffect = true, "read", "none"
+			if existed {
+				// Tool đã có, định nghĩa đổi: lựa chọn của người vận hành được giữ. Tool đã
+				// tắt vẫn tắt, mức rủi ro không hạ (read là mức thấp nhất nên mức cũ luôn
+				// bằng hoặc chặt hơn). Trước đây tool đã tắt bật lại lặng lẽ ở đây.
+				// Tool đang tắt vì bị khoá (locked_at) chứ không vì người vận hành: coi là bật.
+				p.enabled, p.risk, p.sideEffect = old.Enabled || old.LockedAt != nil, old.RiskLevel, old.SideEffect
+				if !p.enabled {
+					res.KeptDisabled = append(res.KeptDisabled, t.Name)
+				}
+			}
+		}
+		if existed && !bytes.Equal(old.DefinitionHash, t.Hash) {
+			// Phân loại dữ liệu và trần chỉ được giữ hoặc siết, không bao giờ nới khi định
+			// nghĩa đổi: nhãn sensitive / egress mà người vận hành đã đặt không rơi mất.
+			p.sensitivity = stricterSensitivity(old.DataSensitivity, p.sensitivity)
+			p.egress = p.egress || old.Egress
+			p.cacheable = p.cacheable && old.Cacheable
+			p.maxResultBytes = min(p.maxResultBytes, old.MaxResultBytes)
+			p.timeoutMs = min(p.timeoutMs, old.TimeoutMs)
 		}
 		desc := t.Description
 		if err := q.InsertTool(ctx, store.InsertToolParams{
@@ -195,6 +230,7 @@ func ApplyDiscovery(ctx context.Context, tx pgxv5.Tx, orgID *uuid.UUID, slug str
 		}
 	}
 	sort.Strings(res.LockedTools)
+	sort.Strings(res.KeptDisabled)
 	if len(lock) > 0 {
 		if err := q.DisableToolsByID(ctx, lock); err != nil {
 			return ApplyResult{}, err
@@ -244,6 +280,9 @@ func Review(ctx context.Context, tx pgxv5.Tx, orgID *uuid.UUID, slug string, ver
 	if approve {
 		if srv.ActiveVersionID != nil {
 			if err := q.InheritPolicy(ctx, store.InheritPolicyParams{NewVersionID: v.ID, ActiveVersionID: *srv.ActiveVersionID}); err != nil {
+				return err
+			}
+			if err := q.TightenChangedPolicy(ctx, store.TightenChangedPolicyParams{NewVersionID: v.ID, ActiveVersionID: *srv.ActiveVersionID}); err != nil {
 				return err
 			}
 		}

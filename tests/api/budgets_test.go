@@ -10,7 +10,6 @@ import (
 
 	"github.com/hqgroups/mcp/internal/adminops"
 	"github.com/hqgroups/mcp/internal/ai/provider"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // TestBudgets: cấu hình budget qua API, và việc thực thi nó quanh từng lượt gọi model:
@@ -20,7 +19,7 @@ func TestBudgets(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	adminA, adminB, viewerA, devA := e.tok("admin-a"), e.tok("admin-b"), e.tok("viewer-a"), e.tok("dev-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

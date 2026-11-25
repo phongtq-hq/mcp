@@ -1,0 +1,197 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="pe-assistant-flow-hosted-v2" name="PE assistant → MCP Platform (mcp.hqwg.pro, ADR-0018)">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2400" pageHeight="1500" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="&lt;b&gt;Bong bóng chat Pricing Engine → MCP Platform tại https://mcp.hqwg.pro (Agent pe-advisor, chỉ đề xuất)&lt;/b&gt;&lt;br&gt;Giả định: platform triển khai trên một máy chủ bằng Docker Compose (ADR-0017), các lớp bảo vệ của ADR-0018 và migration 00039–00041 đã bật · PE prod tại https://pe.hqwg.pro · cập nhật 2026-11-25" style="text;html=1;align=left;verticalAlign=middle;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="20" y="-40" width="1700" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ================= Trình duyệt ================= -->
+        <mxCell id="c_browser" value="Trình duyệt người dùng PE (/admin)" style="swimlane;startSize=30;html=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="80" width="240" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="n_bubble" value="&lt;b&gt;Bong bóng chat&lt;/b&gt;&lt;br&gt;PricingAssistant.svelte&lt;br&gt;stores/assistant.svelte.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="c_browser">
+          <mxGeometry x="20" y="50" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="n_browser_note" value="Chỉ nói chuyện với pe.hqwg.pro; không thấy khoá hqk_, không gọi thẳng mcp.hqwg.pro.&lt;br&gt;Câu hỏi 1–2000 ký tự + tối đa 3 lượt trước; poll theo runId." style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;fontSize=11;" vertex="1" parent="c_browser">
+          <mxGeometry x="20" y="150" width="200" height="130" as="geometry" />
+        </mxCell>
+
+        <!-- ================= PE prod ================= -->
+        <mxCell id="c_pe" value="Pricing Engine prod · https://pe.hqwg.pro (cần triển khai nhánh feat/pricing-assistant)" style="swimlane;startSize=40;html=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="80" width="330" height="830" as="geometry" />
+        </mxCell>
+        <mxCell id="n_ask" value="&lt;b&gt;POST /admin/assistant/ask&lt;/b&gt;&lt;br&gt;quyền admin_pricing_assistant:execute&lt;br&gt;rate limit 10 / 5 phút → {runId}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="60" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n_runs" value="&lt;b&gt;GET /admin/assistant/runs/{id}&lt;/b&gt;&lt;br&gt;chỉ chủ runId đọc được · 120 / phút&lt;br&gt;→ {status, answer?, errorCode?}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="150" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n_svc" value="&lt;b&gt;agent-platform.service.ts&lt;/b&gt;&lt;br&gt;assistant-prompt.ts&lt;br&gt;SSRF guard: chỉ https, địa chỉ công khai" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="240" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n_settings" value="Settings assistant&lt;br&gt;BASE_URL = https://mcp.hqwg.pro&lt;br&gt;PROJECT_ID · AGENT_ID&lt;br&gt;API_KEY hqk_… (mã hoá)&lt;br&gt;role developer, 1 project" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#ffffff;strokeColor=#82b366;fontSize=10;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="340" width="150" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n_peredis" value="Redis của PE&lt;br&gt;runId → userId&lt;br&gt;TTL 30 phút" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#ffffff;strokeColor=#82b366;fontSize=10;" vertex="1" parent="c_pe">
+          <mxGeometry x="180" y="340" width="130" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n_audit" value="Audit PE: assistant.events → log-assistant-audit.listener" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=10;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="470" width="290" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n_peapi" value="&lt;b&gt;PE API v1 (chỉ đọc)&lt;/b&gt;&lt;br&gt;GET /api/v1/prices/{sku} · POST /prices/batch&lt;br&gt;GET /products · /skus · /skus/{id} · /brands&lt;br&gt;key sk_live_… riêng cho MCP server&lt;br&gt;scope api_pricing:read + api_catalog:read" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="640" width="290" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n_peapi_note" value="Dữ liệu prod (gồm giá mua vào): chủ PE phải đồng ý gửi cho model" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#b85450;" vertex="1" parent="c_pe">
+          <mxGeometry x="20" y="760" width="290" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_internet" value="Internet&lt;br&gt;(HTTPS)" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#9673a6;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="640" y="110" width="60" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ================= Máy chủ ================= -->
+        <mxCell id="c_host" value="Máy chủ MCP Platform · Docker Compose &quot;hq&quot; (deployments/production/compose.yaml) · HQ_ENV=staging tới khi có Cloud KMS" style="swimlane;startSize=34;html=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="720" y="40" width="1360" height="900" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_caddy" value="&lt;b&gt;caddy :443&lt;/b&gt; (cửa vào duy nhất)&lt;br&gt;TLS ACME · HSTS&lt;br&gt;&lt;b&gt;mcp.hqwg.pro&lt;/b&gt; = HQ_APP_DOMAIN&lt;br&gt;cho qua / · /config.json · /assets/* · /v1/*&lt;br&gt;→ api:8080; còn lại 404&lt;br&gt;đường nội bộ của gateway không ra ngoài&lt;br&gt;[edge]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="20" y="210" width="240" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="n_caddy_note" value="HQ_MCP_DOMAIN (Gateway cho client MCP ngoài, /mcp/v1/*) cần tên khác, ví dụ gw.hqwg.pro. PE không dùng." style="shape=note;whiteSpace=wrap;html=1;size=12;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;fontSize=10;" vertex="1" parent="c_host">
+          <mxGeometry x="20" y="400" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n_ops" value="&lt;b&gt;Vận hành (hqadmin, profile tools)&lt;/b&gt;&lt;br&gt;service-key init → seed cho gateway/hqadmin, khoá công khai cho integration&lt;br&gt;mcp-tool classify -sensitivity sensitive (2 tool giá)&lt;br&gt;mcp-server scope -scoped=true -add &amp;lt;project&amp;gt;&lt;br&gt;[backend, mcp-*]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;dashed=1;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="c_host">
+          <mxGeometry x="20" y="500" width="240" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="n_idp" value="keycloak (profile idp) · HQ_AUTH_DOMAIN riêng · chỉ cho người đăng nhập console" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="c_host">
+          <mxGeometry x="20" y="670" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_api" value="&lt;b&gt;api :8080&lt;/b&gt; (app_api)&lt;br&gt;Bearer hqk_… · execution:create · Idempotency-Key&lt;br&gt;kiểm budget · chốt model_chain&lt;br&gt;ValidateTools: server phải dùng được ở project (00041)&lt;br&gt;GET /v1/executions/{id}: output chỉ trả khi có execution:read_content&lt;br&gt;[backend, edge]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="310" y="210" width="290" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n_pg" value="&lt;b&gt;postgres&lt;/b&gt; (RLS FORCE)&lt;br&gt;agent_executions · agent_tasks · execution_steps&lt;br&gt;usage_records · audit_logs (chuỗi hash)&lt;br&gt;mcp_tools (data_sensitivity, egress, locked_at)&lt;br&gt;mcp_server_projects · mcp_execution_sensitive_reads&lt;br&gt;[backend]" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#ffffff;strokeColor=#666666;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="310" y="440" width="290" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="n_ui" value="Web console https://mcp.hqwg.pro/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="c_host">
+          <mxGeometry x="310" y="660" width="290" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_temporal" value="&lt;b&gt;temporal&lt;/b&gt; (mTLS, CA nội bộ)&lt;br&gt;AgentExecution · agent-shared&lt;br&gt;lịch sử chỉ chứa tham chiếu&lt;br&gt;[backend]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="650" y="50" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n_worker" value="&lt;b&gt;worker&lt;/b&gt; (app_worker)&lt;br&gt;runtime.Run: pe-advisor&lt;br&gt;≤ 8 vòng · ≤ 12 tool call · 300 s · 0,30 USD&lt;br&gt;chỉ giữ khoá execution token&lt;br&gt;&lt;b&gt;[backend] — không ra Internet&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="650" y="210" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="n_redis" value="&lt;b&gt;redis&lt;/b&gt;&lt;br&gt;rate limit (principal + org) · budget&lt;br&gt;[backend]" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#ffffff;strokeColor=#666666;fontSize=10;" vertex="1" parent="c_host">
+          <mxGeometry x="650" y="440" width="200" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_gw" value="&lt;b&gt;gateway :8081&lt;/b&gt; (app_gateway) · pipeline 8 bước&lt;br&gt;1. execution token, task còn chạy, người khởi tạo&lt;br&gt;2. rate limit theo principal VÀ theo org&lt;br&gt;3. tool đã bật ∩ Agent Version ∩ &lt;b&gt;project được gắn&lt;/b&gt;&lt;br&gt;4. validate theo schema đã ghim&lt;br&gt;5. policy: &lt;b&gt;sensitive chỉ trong execution&lt;/b&gt;;&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;đã đọc sensitive → tool egress / server ngoài &lt;b&gt;cần duyệt&lt;/b&gt;&lt;br&gt;6. ký ngữ cảnh &lt;b&gt;Ed25519&lt;/b&gt; (aud, ExecutionID, hash body, jti)&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;ghi mcp_execution_sensitive_reads TRƯỚC khi gọi tool sensitive&lt;br&gt;7. upstream · 8. che secret, cắt, audit (result_items)&lt;br&gt;giữ HQ_SERVICE_SIGNING_KEY (riêng) · giải mã khoá Anthropic&lt;br&gt;[backend, edge, mcp-docker, mcp-pricing-engine]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=6;" vertex="1" parent="c_host">
+          <mxGeometry x="950" y="50" width="390" height="290" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c_netpe" value="mạng mcp-pricing-engine (internal) + pe-egress" style="swimlane;startSize=24;html=1;whiteSpace=wrap;fillColor=#fbeaea;strokeColor=#b85450;dashed=1;rounded=1;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="900" y="420" width="440" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="n_mcp" value="&lt;b&gt;integration-pricing-engine :8095&lt;/b&gt; (profile cùng tên)&lt;br&gt;endpoint Registry: http://integration-pricing-engine:8095/mcp&lt;br&gt;chỉ giữ &lt;b&gt;HQ_SERVICE_VERIFY_KEY&lt;/b&gt; (khoá công khai; từ chối khởi động nếu có khoá ký)&lt;br&gt;serve.Handler: chữ ký Ed25519 · hash body khớp · jti chưa dùng (ReplayGuard) · đúng org&lt;br&gt;&lt;b&gt;mặc định chỉ chạy trong execution&lt;/b&gt;; DirectTools: list_products, list_skus, get_sku, list_brands&lt;br&gt;get_price_book(s): chỉ trong execution, gắn sensitive&lt;br&gt;HQ_PRICING_ENGINE_URL=https://pe.hqwg.pro · API key từ file 0600&lt;br&gt;300 req/phút · 8 đồng thời · ngắt mạch · 25 s / tool call&lt;br&gt;KHÔNG nằm trên backend: không thấy DB, Redis, Temporal, integration khác" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="c_netpe">
+          <mxGeometry x="15" y="35" width="410" height="220" as="geometry" />
+        </mxCell>
+
+        <mxCell id="c_netdk" value="mạng mcp-docker (internal)" style="swimlane;startSize=24;html=1;whiteSpace=wrap;fillColor=#f0f0f0;strokeColor=#999999;dashed=1;rounded=1;fontSize=11;" vertex="1" parent="c_host">
+          <mxGeometry x="900" y="720" width="440" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n_docker" value="&lt;b&gt;integration-docker&lt;/b&gt; (ví dụ integration khác)&lt;br&gt;chỉ khoá công khai · get_container_logs chỉ trong execution&lt;br&gt;bị chiếm quyền cũng không ký được ngữ cảnh cho PE, không tới được mạng của PE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=10;" vertex="1" parent="c_netdk">
+          <mxGeometry x="15" y="35" width="410" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n_anthropic" value="&lt;b&gt;Anthropic API&lt;/b&gt;&lt;br&gt;model của tier standard&lt;br&gt;khoá của org (tính tiền)" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="2120" y="90" width="210" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="n_ext" value="&lt;b&gt;MCP server ngoài&lt;/b&gt; (do tenant đăng ký)&lt;br&gt;luôn tính là egress → sau khi execution đọc giá vốn, mọi lời gọi cần người duyệt" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="2110" y="300" width="230" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- ================= Cạnh ================= -->
+        <mxCell id="e1" value="1. POST /admin/assistant/ask" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_bubble" target="n_ask">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_own" value="2. runId → userId" style="endArrow=block;html=1;rounded=0;dashed=1;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n_ask" target="n_peredis">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="620" y="175" /><mxPoint x="620" y="475" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_svc" value="3. dựng yêu cầu" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n_ask" target="n_svc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="310" y="175" /><mxPoint x="310" y="355" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_set" value="đọc URL + key" style="endArrow=block;html=1;rounded=0;dashed=1;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_svc" target="n_settings">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="4. POST https://mcp.hqwg.pro/v1/projects/{project}/executions&lt;br&gt;Bearer hqk_… · Idempotency-Key&lt;br&gt;15. GET /v1/executions/{id}" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1" source="n_svc" target="n_caddy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="5 / 16. → api:8080" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_caddy" target="n_api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="6. tạo execution + task, audit" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_api" target="n_pg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="7. start workflow (mTLS)" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n_api" target="n_temporal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1175" y="140" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="8. activity" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_temporal" target="n_worker">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="9. CallModel / CallTool&lt;br&gt;execution token (HS256)" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_worker" target="n_gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="10. Messages API" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1" source="n_gw" target="n_anthropic">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ext" value="cần duyệt nếu đã đọc sensitive" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="n_gw" target="n_ext">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_gwredis" value="" style="endArrow=block;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="n_gw" target="n_redis">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mark" value="ghi sensitive read" style="endArrow=block;html=1;rounded=0;dashed=1;fontSize=10;labelBackgroundColor=#ffffff;strokeColor=#b85450;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n_gw" target="n_pg">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1150" y="410" /><mxPoint x="1170" y="410" /><mxPoint x="1170" y="590" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="11. tools/call + ngữ cảnh Ed25519&lt;br&gt;(chỉ qua mạng mcp-pricing-engine)" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;strokeColor=#b85450;" edge="1" parent="1" source="n_gw" target="n_mcp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="12. GET https://pe.hqwg.pro/api/v1/… (sk_live_…, qua pe-egress)" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#b85450;" edge="1" parent="1" source="n_mcp" target="n_peapi">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1845" y="970" /><mxPoint x="670" y="970" /><mxPoint x="670" y="775" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="13. steps · usage" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="n_worker" target="n_pg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="14. poll" style="endArrow=block;html=1;rounded=0;fontSize=10;labelBackgroundColor=#ffffff;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n_bubble" target="n_runs">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="140" y="265" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="" style="endArrow=block;html=1;rounded=0;dashed=1;" edge="1" parent="1" source="n_runs" target="n_svc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ================= Chú thích ================= -->
+        <mxCell id="legend" value="&lt;b&gt;Lớp bảo vệ trên đường đọc dữ liệu (ADR-0018, migration 00039–00041)&lt;/b&gt;&lt;br&gt;• &lt;b&gt;Không ai gọi thẳng được integration:&lt;/b&gt; integration nằm trên mạng riêng chỉ có gateway / hqadmin; nó chỉ giữ khoá công khai nên bị chiếm quyền cũng không ký được ngữ cảnh; mỗi ngữ cảnh gắn với một body và dùng một lần (không phát lại được).&lt;br&gt;• &lt;b&gt;Không đọc giá vốn ngoài Agent:&lt;/b&gt; tool giá chỉ chạy trong execution (integration chặn, Gateway chặn theo nhãn sensitive và ẩn khỏi tools/list của client ngoài).&lt;br&gt;• &lt;b&gt;Không đọc từ project khác:&lt;/b&gt; pricing-engine giới hạn vào project đã gắn (Gateway lọc tool, api từ chối Agent Version ở project khác).&lt;br&gt;• &lt;b&gt;Không đẩy giá vốn ra ngoài lặng lẽ:&lt;/b&gt; execution đã đọc sensitive gọi tool egress hay MCP server ngoài → cần người duyệt. Câu trả lời của Agent chỉ người có execution:read_content đọc được.&lt;br&gt;• &lt;b&gt;Phát hiện:&lt;/b&gt; audit mcp_tool.call (hash arguments, result_bytes, result_items) · hạn mức theo principal và theo org.&lt;br&gt;&lt;br&gt;&lt;b&gt;Nét:&lt;/b&gt; tím đậm = Internet; đỏ = đường dữ liệu PE; đứt = phụ. [backend] / [edge] / [mcp-*] = mạng compose. &lt;b&gt;Còn mở:&lt;/b&gt; kênh gateway → integration là HTTP (có chữ ký, chưa mã hoá); execution token HS256 dùng chung api / worker / gateway; service integration-pricing-engine và lệnh scope / classify phải chạy tay sau khi deploy." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=11;fillColor=#ffffff;strokeColor=#999999;spacing=10;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="1010" width="2320" height="210" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

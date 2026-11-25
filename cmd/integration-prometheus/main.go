@@ -1,6 +1,6 @@
 // Command integration-prometheus: managed MCP server chỉ đọc cho Prometheus.
 //
-// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (HQ_SERVICE_SIGNING_KEY); không
+// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (kiểm bằng khoá công khai HQ_SERVICE_VERIFY_KEY); không
 // nhận token của người dùng. Địa chỉ Prometheus (HQ_PROMETHEUS_URL) và bearer token
 // (HQ_PROMETHEUS_BEARER_TOKEN_FILE, tuỳ chọn) do người vận hành managed server đặt:
 // đây không phải URL do tenant nhập, nên không đi qua SSRF guard, và không tool nào
@@ -17,8 +17,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hqgroups/mcp/internal/integration/prometheus"
+	"github.com/hqgroups/mcp/internal/integration/serve"
 	"github.com/hqgroups/mcp/internal/platform/process"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 func main() {
@@ -62,11 +62,7 @@ func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
 	if err != nil {
 		return err
 	}
-	key, err := signedctx.ParseKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
-	if err != nil {
-		return errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
-	}
-	signer, err := signedctx.NewSigner(key)
+	verifier, err := serve.VerifierFromEnv(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -75,6 +71,6 @@ func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
 	if err != nil || orgID == uuid.Nil {
 		return errors.New("HQ_PROMETHEUS_ORG_ID is required (id của organization sở hữu Prometheus này)")
 	}
-	mux.Handle("/mcp", prometheus.Handler(client, signer, orgID))
+	mux.Handle("/mcp", prometheus.Handler(client, verifier, orgID))
 	return nil
 }

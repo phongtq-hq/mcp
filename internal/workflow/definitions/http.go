@@ -18,6 +18,8 @@ import (
 // Authorizer là thứ handler cần từ Authorization & Policy.
 type Authorizer interface {
 	Require(ctx context.Context, permission string, projectID *uuid.UUID) error
+	// Missing trả về permission trong danh sách mà principal không có, không ghi audit.
+	Missing(ctx context.Context, permissions []string, projectID *uuid.UUID) ([]string, error)
 }
 
 // Permission mà các endpoint ở đây yêu cầu. Giá trị phải có trong danh mục của authz.
@@ -156,6 +158,36 @@ func toAPI(w Workflow) api.Workflow {
 		Schedule: w.Schedule, Status: api.WorkflowStatus(w.Status), CreatedAt: &w.CreatedAt, UpdatedAt: &w.UpdatedAt}
 	_ = json.Unmarshal(w.Definition, &out.Definition)
 	return out
+}
+
+// permExecReadContent: đọc NỘI DUNG (input, output) của execution. Lần chạy workflow chiếu
+// lại input / output của execution planned của nó, nên áp cùng luật như GET /v1/executions:
+// người chỉ có execution:read (viewer) thấy trạng thái, không thấy nội dung.
+const permExecReadContent = "execution:read_content"
+
+// runsOut chuyển các lần chạy của một project ra API, bỏ input / output nếu người gọi thiếu
+// execution:read_content trong project đó. Không ghi audit: đây là lọc trường.
+func (h *handlers) runsOut(ctx context.Context, projectID uuid.UUID, runs ...Run) ([]api.WorkflowExecution, error) {
+	missing, err := h.authz.Missing(ctx, []string{permExecReadContent}, &projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.WorkflowExecution, len(runs))
+	for i, run := range runs {
+		out[i] = toAPIRun(run)
+		if len(missing) > 0 {
+			out[i].Input, out[i].Output = nil, nil
+		}
+	}
+	return out, nil
+}
+
+func (h *handlers) runOut(ctx context.Context, run Run) (api.WorkflowExecution, error) {
+	out, err := h.runsOut(ctx, run.ProjectID, run)
+	if err != nil {
+		return api.WorkflowExecution{}, err
+	}
+	return out[0], nil
 }
 
 func toAPIRun(run Run) api.WorkflowExecution {
@@ -394,7 +426,11 @@ func (h *handlers) start(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/v1/workflow-executions/"+run.ID.String())
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIRun(run))
+	out, err := h.runOut(r.Context(), run)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusAccepted, out)
 	return nil
 }
 
@@ -420,9 +456,9 @@ func (h *handlers) listRuns(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	data := make([]api.WorkflowExecution, len(items))
-	for i, it := range items {
-		data[i] = toAPIRun(it)
+	data, err := h.runsOut(r.Context(), cur.ProjectID, items...)
+	if err != nil {
+		return err
 	}
 	writePage(w, data, next)
 	return nil
@@ -433,7 +469,11 @@ func (h *handlers) getRun(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, toAPIRun(run))
+	out, err := h.runOut(r.Context(), run)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 	return nil
 }
 
@@ -445,6 +485,10 @@ func (h *handlers) cancelRun(w http.ResponseWriter, r *http.Request) error {
 	if run, err = h.svc.CancelRun(r.Context(), run.ID); err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIRun(run))
+	out, err := h.runOut(r.Context(), run)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusAccepted, out)
 	return nil
 }

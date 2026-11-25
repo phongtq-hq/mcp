@@ -1593,9 +1593,11 @@ export interface components {
                 /** Format: uuid */
                 id?: string | null;
             };
+            /** @description Vắng mặt khi người gọi không có `execution:read_content` trong project (chỉ có `execution:read`) */
             input?: {
                 [key: string]: unknown;
             };
+            /** @description Câu trả lời của Agent, có thể trích dữ liệu nó đã đọc. Vắng mặt khi người gọi không có `execution:read_content` */
             output?: {
                 [key: string]: unknown;
             } | null;
@@ -1631,9 +1633,12 @@ export interface components {
             on_failure?: "fail_execution" | "continue" | "skip_dependents";
             budget?: components["schemas"]["Money"] | null;
             depth: number;
+            /** @description Chuỗi rỗng khi người gọi không có `execution:read_content` */
             goal: string;
             status: components["schemas"]["TaskStatus"];
+            /** @description Vắng mặt khi người gọi không có `execution:read_content` */
             output_summary?: string | null;
+            /** @description Vắng mặt khi người gọi không có `execution:read_content` */
             output?: {
                 [key: string]: unknown;
             } | null;

@@ -26,7 +26,7 @@ func writeFile(t *testing.T, content string) string {
 func TestLoad(t *testing.T) {
 	key := strings.Repeat("ab", 32)
 	base := map[string]string{
-		"HQ_ENV": "local", "HQ_LOKI_URL": "http://loki:3100", "HQ_LOKI_ORG_ID": testOrg, "HQ_SERVICE_SIGNING_KEY": key,
+		"HQ_ENV": "local", "HQ_LOKI_URL": "http://loki:3100", "HQ_LOKI_ORG_ID": testOrg, "HQ_SERVICE_VERIFY_KEY": key,
 	}
 	with := func(over map[string]string) func(string) string {
 		env := map[string]string{}
@@ -76,8 +76,9 @@ func TestLoad(t *testing.T) {
 		"nhiều tenant khi không bật cờ": {"HQ_LOKI_TENANT_ID": "team-a|team-b"},
 		"cờ nhiều tenant giá trị lạ":    {"HQ_LOKI_TENANT_ID": "team-a|team-b", "HQ_LOKI_ALLOW_MULTI_TENANT": "true"},
 		"tenant có khoảng trắng":        {"HQ_LOKI_TENANT_ID": "team a"},
-		"thiếu khoá ký":                 {"HQ_SERVICE_SIGNING_KEY": ""},
-		"khoá ký ngắn":                  {"HQ_SERVICE_SIGNING_KEY": "abcd"},
+		"thiếu khoá kiểm":               {"HQ_SERVICE_VERIFY_KEY": ""},
+		"được cấp khoá ký":              {"HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32)},
+		"khoá kiểm ngắn":                {"HQ_SERVICE_VERIFY_KEY": "abcd"},
 		"thiếu org":                     {"HQ_LOKI_ORG_ID": ""},
 		"org là nil":                    {"HQ_LOKI_ORG_ID": "00000000-0000-0000-0000-000000000000"},
 	}

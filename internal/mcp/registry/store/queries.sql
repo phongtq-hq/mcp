@@ -51,11 +51,33 @@ FROM mcp_tools o
 WHERE n.server_version_id = @new_version_id AND o.server_version_id = @active_version_id
   AND o.name = n.name AND o.definition_hash = n.definition_hash;
 
+-- name: TightenChangedPolicy :exec
+-- Cùng thời điểm: tool có định nghĩa ĐÃ ĐỔI chỉ được giữ hoặc siết theo phân loại HIỆN TẠI
+-- của version đang hoạt động (người vận hành có thể đã tắt tool hay gắn nhãn sensitive
+-- trong lúc version mới chờ duyệt; bản chép lúc discovery không thấy thay đổi đó). Tool đang
+-- tắt chỉ vì bị khoá (locked_at) không tính là bị tắt.
+UPDATE mcp_tools n SET
+  enabled = n.enabled AND (o.enabled OR o.locked_at IS NOT NULL),
+  risk_level = CASE WHEN array_position(ARRAY['read','write','destructive','financial'], o.risk_level)
+                       > array_position(ARRAY['read','write','destructive','financial'], n.risk_level)
+                    THEN o.risk_level ELSE n.risk_level END,
+  data_sensitivity = CASE WHEN array_position(ARRAY['public','internal','sensitive'], o.data_sensitivity)
+                             > array_position(ARRAY['public','internal','sensitive'], n.data_sensitivity)
+                          THEN o.data_sensitivity ELSE n.data_sensitivity END,
+  egress = n.egress OR o.egress,
+  cacheable = n.cacheable AND o.cacheable,
+  timeout_ms = LEAST(n.timeout_ms, o.timeout_ms),
+  max_result_bytes = LEAST(n.max_result_bytes, o.max_result_bytes),
+  updated_at = clock_timestamp()
+FROM mcp_tools o
+WHERE n.server_version_id = @new_version_id AND o.server_version_id = @active_version_id
+  AND o.name = n.name AND o.definition_hash <> n.definition_hash;
+
 -- name: SetServerStatus :execrows
 UPDATE mcp_servers SET status = @status, updated_at = clock_timestamp() WHERE id = @id;
 
 -- name: ListToolsOfVersion :many
-SELECT id, name, definition_hash, enabled, risk_level, side_effect, data_sensitivity, egress, cacheable, timeout_ms, max_result_bytes
+SELECT id, name, definition_hash, enabled, risk_level, side_effect, data_sensitivity, egress, cacheable, timeout_ms, max_result_bytes, locked_at
 FROM mcp_tools WHERE server_version_id = @server_version_id;
 
 -- name: InsertTool :exec
@@ -65,7 +87,8 @@ VALUES (@id, sqlc.narg('org_id'), @server_id, @server_version_id, @name, @descri
   @enabled, @risk_level, @side_effect, @data_sensitivity, @egress, @cacheable, @timeout_ms, @max_result_bytes);
 
 -- name: DisableToolsByID :exec
-UPDATE mcp_tools SET enabled = false, updated_at = clock_timestamp() WHERE id = ANY(@ids::uuid[]);
+-- Tạm khoá (định nghĩa đổi): khác với người vận hành tắt tool, xem migration 00039.
+UPDATE mcp_tools SET enabled = false, locked_at = clock_timestamp(), updated_at = clock_timestamp() WHERE id = ANY(@ids::uuid[]);
 
 -- name: ClassifyTool :execrows
 UPDATE mcp_tools SET
@@ -74,6 +97,8 @@ UPDATE mcp_tools SET
   side_effect      = COALESCE(sqlc.narg('side_effect'), side_effect),
   data_sensitivity = COALESCE(sqlc.narg('data_sensitivity'), data_sensitivity),
   egress           = COALESCE(sqlc.narg('egress'), egress),
+  -- Người vận hành bật hay tắt tường minh: tool không còn là "bị khoá".
+  locked_at        = CASE WHEN sqlc.narg('enabled')::bool IS NULL THEN locked_at END,
   updated_at       = clock_timestamp()
 WHERE server_version_id = @server_version_id AND name = @name;
 
@@ -103,6 +128,11 @@ WHERE (s.org_id = @org_id OR s.org_id IS NULL) AND s.status = 'active'
   AND (sqlc.narg('enabled')::bool IS NULL OR t.enabled = sqlc.narg('enabled'))
   AND (sqlc.narg('risk_level')::text IS NULL OR t.risk_level = sqlc.narg('risk_level'))
   AND (sqlc.narg('tool_id')::uuid IS NULL OR t.id = sqlc.narg('tool_id'))
+  -- Chính sách project (migration 00041): server giới hạn theo project chỉ có mặt ở project
+  -- đã được gắn. project_id NULL: không lọc (danh sách quản trị cấp org).
+  AND (sqlc.narg('project_id')::uuid IS NULL OR NOT s.project_scoped OR EXISTS (
+        SELECT 1 FROM mcp_server_projects b
+        WHERE b.org_id = s.org_id AND b.server_id = s.id AND b.project_id = sqlc.narg('project_id')))
 ORDER BY s.slug, (s.org_id IS NOT NULL), t.name LIMIT @row_limit;
 
 -- name: GetOrgServer :one

@@ -23,5 +23,6 @@ Trạng thái hợp lệ: `Đề xuất`, `Chấp thuận`, `Thay thế bởi AD
 | [0015](0015-workflows-compile-to-planned-executions.md) | Workflow của người dùng biên dịch thành execution `planned`; định dạng định nghĩa; activity tạo lần chạy theo lịch ở `api` | Đề xuất |
 | [0016](0016-react-web-console-with-build-step.md) | Giao diện web viết bằng React, có bước build; vẫn là file tĩnh nhúng vào `api`, CSP không đổi | Đề xuất |
 | [0017](0017-single-host-docker-compose-deployment.md) | Triển khai trên một máy chủ bằng Docker Compose (không Kubernetes); Caddy làm cửa vào; Temporal tự vận hành với mTLS | Chấp thuận |
+| [0018](0018-asymmetric-signed-context-and-execution-only-default.md) | Ngữ cảnh ký Ed25519 gắn với từng request; tool của managed server mặc định chỉ chạy trong execution; mỗi managed server một mạng riêng | Đề xuất |
 
 Quyết định còn mở, sẽ có ADR khi chốt: nhà cung cấp Cloud KMS (xem ADR-0012); khung đánh giá (eval) cho Agent. (Định dạng định nghĩa workflow: ADR-0015, còn Đề xuất.)

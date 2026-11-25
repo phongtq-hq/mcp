@@ -11,7 +11,6 @@
 package contract
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -35,11 +34,12 @@ import (
 type Server struct {
 	// Slug là định danh của server trong Registry, cũng là đích (aud) của ngữ cảnh ký.
 	Slug string
-	// Handler là HTTP handler của server, dựng với SigningKey và OrgID bên dưới, trên
-	// một hệ thống đích giả lập.
+	// Handler là HTTP handler của server, dựng với Signer.Verifier() và OrgID bên dưới,
+	// trên một hệ thống đích giả lập.
 	Handler http.Handler
-	// SigningKey là khoá mà Handler dùng để kiểm ngữ cảnh của Gateway.
-	SigningKey []byte
+	// Signer đóng vai Gateway: bộ test ký ngữ cảnh bằng nó. Handler chỉ được giữ khoá
+	// công khai tương ứng.
+	Signer *signedctx.Signer
 	// OrgID là organization mà server phục vụ. uuid.Nil nghĩa là server không gắn với
 	// một org; khi đó phần kiểm "org khác bị từ chối" bị bỏ qua (và việc cách ly tenant
 	// của server phải được review bằng tay).
@@ -54,6 +54,10 @@ type Server struct {
 // Tool là những gì integration khai về một tool.
 type Tool struct {
 	Name string
+	// Direct: tool được gọi trực tiếp (không thuộc execution), tức server khai nó bằng
+	// serve.Direct. Bộ test kiểm cả hai chiều: tool Direct chạy được khi gọi trực tiếp,
+	// tool không Direct bị từ chối mà không chạm tới hệ thống đích.
+	Direct bool
 	// Write: tool có tác động lên hệ thống đích. Tool không khai Write phải mang
 	// readOnlyHint và không được có tham số của tool ghi.
 	Write bool
@@ -89,14 +93,10 @@ func Run(t *testing.T, srv Server) {
 // thường; Check tồn tại để chính bộ test này được kiểm bằng server cố ý sai.
 func Check(ctx context.Context, srv Server) []string {
 	c := &checker{srv: srv}
-	if srv.Slug == "" || srv.Handler == nil || srv.TargetRequests == nil || len(srv.Tools) == 0 {
-		return []string{"khai báo thiếu: cần Slug, Handler, TargetRequests và ít nhất một tool"}
+	if srv.Slug == "" || srv.Handler == nil || srv.Signer == nil || srv.TargetRequests == nil || len(srv.Tools) == 0 {
+		return []string{"khai báo thiếu: cần Slug, Handler, Signer, TargetRequests và ít nhất một tool"}
 	}
-	signer, err := signedctx.NewSigner(srv.SigningKey)
-	if err != nil {
-		return []string{"SigningKey không hợp lệ: " + err.Error()}
-	}
-	c.signer = signer
+	c.signer = srv.Signer
 	hs := httptest.NewServer(srv.Handler)
 	defer hs.Close()
 	c.url = hs.URL
@@ -106,6 +106,7 @@ func Check(ctx context.Context, srv Server) []string {
 	if tools != nil {
 		c.checkDiscovery(ctx, len(tools))
 		c.checkOtherOrg(ctx)
+		c.checkDirect(ctx)
 		c.checkCalls(ctx, tools)
 	}
 	return c.violations
@@ -122,46 +123,52 @@ func (c *checker) failf(format string, args ...any) {
 	c.violations = append(c.violations, fmt.Sprintf(format, args...))
 }
 
-func (c *checker) callContext(org uuid.UUID) string {
+// callCtx là ngữ cảnh tool call của org; inExecution thêm ExecutionID như Gateway làm
+// trên tuyến của Agent Runtime.
+func (c *checker) callCtx(org uuid.UUID, inExecution bool) signedctx.Context {
 	if org == uuid.Nil {
 		org = uuid.New() // server không gắn org: org nào cũng là tenant hợp lệ
 	}
-	return c.signer.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: c.srv.Slug, OrgID: org,
-		ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}, time.Now())
-}
-
-func (c *checker) discoveryContext() string {
-	return c.signer.Sign(signedctx.Context{Kind: signedctx.KindDiscovery, Audience: c.srv.Slug}, time.Now())
-}
-
-type headerTransport struct{ value func() string }
-
-func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	if v := h.value(); v != "" {
-		r.Header.Set(signedctx.Header, v)
+	sc := signedctx.Context{Kind: signedctx.KindCall, Audience: c.srv.Slug, OrgID: org,
+		ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}
+	if inExecution {
+		exec := uuid.New()
+		sc.ExecutionID = &exec
 	}
-	return http.DefaultTransport.RoundTrip(r)
+	return sc
 }
 
-// session nối một MCP client thật vào server; mỗi request mang một ngữ cảnh mới ký.
-func (c *checker) session(ctx context.Context, header func() string) (*mcp.ClientSession, error) {
+func (c *checker) discoveryCtx() signedctx.Context {
+	return signedctx.Context{Kind: signedctx.KindDiscovery, Audience: c.srv.Slug}
+}
+
+// signed trả về hàm ký sc cho đúng body (cho post).
+func (c *checker) signed(sc signedctx.Context) func(body string) string {
+	return func(body string) string { return c.signer.SignBody(sc, []byte(body), time.Now()) }
+}
+
+// fixed trả về đúng một giá trị header bất kể body (cho các ca chữ ký sai).
+func fixed(header string) func(string) string { return func(string) string { return header } }
+
+// session nối một MCP client thật vào server; mỗi request mang một ngữ cảnh mới ký cho
+// đúng body của nó, như Gateway.
+func (c *checker) session(ctx context.Context, sc signedctx.Context) (*mcp.ClientSession, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "contract", Version: "0"}, nil)
 	return client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint: c.url, DisableStandaloneSSE: true, MaxRetries: -1,
-		HTTPClient: &http.Client{Transport: headerTransport{value: header}, Timeout: time.Minute},
+		HTTPClient: &http.Client{Transport: &signedctx.Transport{Signer: c.signer, Context: sc}, Timeout: time.Minute},
 	}, nil)
 }
 
 // post gửi một thông điệp JSON-RPC thô, không qua SDK.
-func (c *checker) post(ctx context.Context, header, body string) (int, string) {
+func (c *checker) post(ctx context.Context, sign func(body string) string, body string) (int, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, strings.NewReader(body))
 	if err != nil {
 		return 0, err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if header != "" {
+	if header := sign(body); header != "" {
 		req.Header.Set(signedctx.Header, header)
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -246,47 +253,75 @@ func withKey(t Tool, args map[string]any) map[string]any {
 }
 
 // checkSignature: request không có ngữ cảnh, hoặc ngữ cảnh không do Gateway ký cho
-// đúng server này, bị từ chối trước khi chạm tới hệ thống đích.
+// đúng server này và đúng body này, hoặc đã dùng một lần, bị từ chối trước khi chạm tới
+// hệ thống đích.
 func (c *checker) checkSignature(ctx context.Context) {
-	other, _ := signedctx.NewSigner(bytes.Repeat([]byte{0x5a}, 32))
-	call := signedctx.Context{Kind: signedctx.KindCall, Audience: c.srv.Slug, OrgID: c.srv.OrgID,
-		ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}
-	if call.OrgID == uuid.Nil {
-		call.OrgID = uuid.New()
-	}
+	otherPriv, _ := signedctx.ParseSigningKey(strings.Repeat("5a", 32))
+	other, _ := signedctx.NewSigner(otherPriv)
+	call := c.callCtx(c.srv.OrgID, true)
 	wrongAud := call
 	wrongAud.Audience = c.srv.Slug + "-other"
-	valid := c.signer.Sign(call, time.Now())
-	// Đổi nội dung nhưng giữ chữ ký cũ.
-	forged := call
-	forged.OrgID = uuid.New()
-	forgedBody, _ := json.Marshal(forged)
-	_, sig, _ := strings.Cut(valid, ".")
-
-	cases := []struct{ name, header string }{
-		{"không có ngữ cảnh", ""},
-		{"ngữ cảnh rác", "abc.def"},
-		{"ký bằng khoá khác", other.Sign(call, time.Now())},
-		{"đích là server khác", c.signer.Sign(wrongAud, time.Now())},
-		{"đã hết hạn", c.signer.Sign(call, time.Now().Add(-time.Hour))},
-		{"nội dung bị sửa sau khi ký", base64.RawURLEncoding.EncodeToString(forgedBody) + "." + sig},
-		{"mất chữ ký", strings.SplitN(valid, ".", 2)[0] + "."},
+	expired := func(body string) string {
+		return c.signer.SignBody(call, []byte(body), time.Now().Add(-time.Hour))
 	}
+	// Đổi nội dung nhưng giữ chữ ký cũ.
+	forged := func(body string) string {
+		valid := c.signer.SignBody(call, []byte(body), time.Now())
+		_, sig, _ := strings.Cut(valid, ".")
+		f := call
+		f.OrgID = uuid.New()
+		f.BodySHA256 = signedctx.BodyHash([]byte(body))
+		f.ID = uuid.NewString()
+		raw, _ := json.Marshal(f)
+		return base64.RawURLEncoding.EncodeToString(raw) + "." + sig
+	}
+	noSig := func(body string) string {
+		return strings.SplitN(c.signer.SignBody(call, []byte(body), time.Now()), ".", 2)[0] + "."
+	}
+	otherBody := func(string) string { return c.signer.SignBody(call, []byte(`{"jsonrpc":"2.0"}`), time.Now()) }
+
+	cases := []struct {
+		name string
+		sign func(string) string
+	}{
+		{"không có ngữ cảnh", fixed("")},
+		{"ngữ cảnh rác", fixed("abc.def")},
+		{"ký bằng khoá khác", func(b string) string { return other.SignBody(call, []byte(b), time.Now()) }},
+		{"đích là server khác", c.signed(wrongAud)},
+		{"đã hết hạn", expired},
+		{"nội dung bị sửa sau khi ký", forged},
+		{"mất chữ ký", noSig},
+		{"ký cho body khác", otherBody},
+	}
+	bodies := []string{rpc("tools/list", map[string]any{}), c.firstCall()}
 	for _, tc := range cases {
-		for _, body := range []string{rpc("tools/list", map[string]any{}), c.firstCall()} {
-			before := c.srv.TargetRequests()
-			status, resp := c.post(ctx, tc.header, body)
-			if status != http.StatusUnauthorized && status != http.StatusForbidden {
-				c.failf("chữ ký: %s: muốn 401 / 403, nhận %d", tc.name, status)
-			}
-			if n := c.srv.TargetRequests() - before; n != 0 {
-				c.failf("chữ ký: %s: %d request đã tới hệ thống đích", tc.name, n)
-			}
-			for _, t := range c.srv.Tools {
-				if strings.Contains(resp, t.Name) {
-					c.failf("chữ ký: %s: phản hồi từ chối lộ tên tool %s", tc.name, t.Name)
-				}
-			}
+		for _, body := range bodies {
+			c.expectUnauthorized(ctx, tc.name, tc.sign, body)
+		}
+	}
+	// Dùng lại đúng header của một request đã được nhận.
+	for _, body := range bodies {
+		header := c.signer.SignBody(call, []byte(body), time.Now())
+		if status, _ := c.post(ctx, fixed(header), body); status != http.StatusOK {
+			c.failf("chữ ký: request hợp lệ bị từ chối (status %d)", status)
+			continue
+		}
+		c.expectUnauthorized(ctx, "dùng lại header", fixed(header), body)
+	}
+}
+
+func (c *checker) expectUnauthorized(ctx context.Context, name string, sign func(string) string, body string) {
+	before := c.srv.TargetRequests()
+	status, resp := c.post(ctx, sign, body)
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		c.failf("chữ ký: %s: muốn 401 / 403, nhận %d", name, status)
+	}
+	if n := c.srv.TargetRequests() - before; n != 0 {
+		c.failf("chữ ký: %s: %d request đã tới hệ thống đích", name, n)
+	}
+	for _, t := range c.srv.Tools {
+		if strings.Contains(resp, t.Name) {
+			c.failf("chữ ký: %s: phản hồi từ chối lộ tên tool %s", name, t.Name)
 		}
 	}
 }
@@ -294,7 +329,7 @@ func (c *checker) checkSignature(ctx context.Context) {
 // checkDiscovery: ngữ cảnh discovery (không gắn tenant) liệt kê được tool nhưng
 // không gọi được tool nào.
 func (c *checker) checkDiscovery(ctx context.Context, want int) {
-	sess, err := c.session(ctx, c.discoveryContext)
+	sess, err := c.session(ctx, c.discoveryCtx())
 	if err != nil {
 		c.failf("discovery: không kết nối được bằng ngữ cảnh discovery: %v", err)
 		return
@@ -324,7 +359,7 @@ func (c *checker) checkDiscovery(ctx context.Context, want int) {
 			strings.Replace(call, `"method":"tools/call"`, decoy+`,"method":"tools/call"`, 1)) // mồi đứng trước
 	}
 	for _, body := range bodies {
-		if status, resp := c.post(ctx, c.discoveryContext(), body); !refused(status, resp) {
+		if status, resp := c.post(ctx, c.signed(c.discoveryCtx()), body); !refused(status, resp) {
 			c.failf("discovery: tools/call thô được chấp nhận (status %d): %s", status, truncateBody(body))
 		}
 	}
@@ -340,7 +375,7 @@ func (c *checker) checkOtherOrg(ctx context.Context) {
 		return
 	}
 	before := c.srv.TargetRequests()
-	stranger := func() string { return c.callContext(uuid.New()) }
+	stranger := c.callCtx(uuid.New(), true)
 	if sess, err := c.session(ctx, stranger); err == nil {
 		defer func() { _ = sess.Close() }()
 		for _, t := range c.srv.Tools {
@@ -352,7 +387,7 @@ func (c *checker) checkOtherOrg(ctx context.Context) {
 			}
 		}
 	}
-	if status, resp := c.post(ctx, stranger(), c.firstCall()); !refused(status, resp) {
+	if status, resp := c.post(ctx, c.signed(c.callCtx(uuid.New(), true)), c.firstCall()); !refused(status, resp) {
 		c.failf("tenant: tools/call thô của org khác được chấp nhận (status %d)", status)
 	}
 	if n := c.srv.TargetRequests() - before; n != 0 {
@@ -508,7 +543,7 @@ func schemaMap(v any) map[string]any {
 // checkDefinitions đọc tools/list bằng ngữ cảnh của org sở hữu và kiểm định nghĩa
 // từng tool. Trả về schema theo tên tool, hoặc nil nếu không đọc được.
 func (c *checker) checkDefinitions(ctx context.Context) map[string]map[string]any {
-	sess, err := c.session(ctx, func() string { return c.callContext(c.srv.OrgID) })
+	sess, err := c.session(ctx, c.callCtx(c.srv.OrgID, true))
 	if err != nil {
 		c.failf("không kết nối được bằng ngữ cảnh hợp lệ: %v", err)
 		return nil
@@ -611,11 +646,48 @@ func resultSizes(res *mcp.CallToolResult) (text, structured int) {
 	return text, structured
 }
 
+// checkDirect: tool call của org sở hữu nhưng KHÔNG thuộc execution (client bên ngoài gọi
+// thẳng qua Gateway). Tool khai Direct chạy được; tool khác bị từ chối và không chạm tới
+// hệ thống đích. Mặc định của serve.Handler là chỉ-execution: khai sai theo chiều nào bộ
+// test cũng bắt được.
+func (c *checker) checkDirect(ctx context.Context) {
+	sess, err := c.session(ctx, c.callCtx(c.srv.OrgID, false))
+	if err != nil {
+		c.failf("trực tiếp: không kết nối được: %v", err)
+		return
+	}
+	defer func() { _ = sess.Close() }()
+	for _, t := range c.srv.Tools {
+		if len(t.Samples) == 0 {
+			continue
+		}
+		before, done := c.srv.TargetRequests(), 0
+		if t.Effects != nil {
+			done = t.Effects()
+		}
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: t.Name, Arguments: withKey(t, t.Samples[0])})
+		ok := err == nil && !res.IsError
+		switch {
+		case t.Direct && !ok:
+			c.failf("trực tiếp: tool %s khai Direct nhưng gọi trực tiếp bị từ chối (lỗi: %v)", t.Name, err)
+		case !t.Direct && ok:
+			c.failf("trực tiếp: tool %s không khai Direct nhưng gọi trực tiếp được; khai serve.Direct hoặc sửa khai báo", t.Name)
+		case !t.Direct:
+			if n := c.srv.TargetRequests() - before; n != 0 {
+				c.failf("trực tiếp: tool %s bị từ chối nhưng %d request đã tới hệ thống đích", t.Name, n)
+			}
+			if t.Effects != nil && t.Effects() != done {
+				c.failf("trực tiếp: tool %s bị từ chối nhưng đã gây tác động", t.Name)
+			}
+		}
+	}
+}
+
 // checkCalls gọi từng tool bằng ngữ cảnh của org sở hữu: kết quả trong trần, trường
 // lạ và chuỗi quá dài bị từ chối trước khi tới hệ thống đích, tool ghi tôn trọng
 // idempotency_key và dry_run.
 func (c *checker) checkCalls(ctx context.Context, schemas map[string]map[string]any) {
-	sess, err := c.session(ctx, func() string { return c.callContext(c.srv.OrgID) })
+	sess, err := c.session(ctx, c.callCtx(c.srv.OrgID, true))
 	if err != nil {
 		c.failf("không kết nối được bằng ngữ cảnh hợp lệ: %v", err)
 		return
@@ -704,4 +776,28 @@ func (c *checker) checkCalls(ctx context.Context, schemas map[string]map[string]
 			}
 		}
 	}
+}
+
+// TestSigner trả về một Signer cố định cho test của integration: test dựng Handler bằng
+// TestSigner().Verifier() và khai Server.Signer = TestSigner().
+func TestSigner() *signedctx.Signer {
+	priv, err := signedctx.ParseSigningKey(strings.Repeat("6b", 32))
+	if err != nil {
+		panic(err)
+	}
+	s, err := signedctx.NewSigner(priv)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+// ExecutionTransport ký mỗi request như Gateway ký trên tuyến của Agent Runtime: ngữ cảnh
+// tool call của org, kèm một ExecutionID, cho đúng body của request. Dùng trong test của
+// integration để gọi tool qua MCP client thật. base nil là http.DefaultTransport.
+func ExecutionTransport(signer *signedctx.Signer, slug string, org uuid.UUID, base http.RoundTripper) http.RoundTripper {
+	exec := uuid.New()
+	return &signedctx.Transport{Signer: signer, Base: base, Context: signedctx.Context{
+		Kind: signedctx.KindCall, Audience: slug, OrgID: org, ProjectID: uuid.New(),
+		Initiator: "user:" + uuid.NewString(), ExecutionID: &exec}}
 }

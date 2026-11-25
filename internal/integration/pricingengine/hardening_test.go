@@ -61,8 +61,8 @@ func TestPriceToolsOnlyInExecution(t *testing.T) {
 	if res, out := call(t, inExec, "get_price_book", map[string]any{"sku": "HQ-FREEFIRE-GC-20"}); res.IsError || !strings.Contains(out, "17.000000") {
 		t.Errorf("trong execution tool giá phải chạy: %s", out)
 	}
-	if got := strings.Join(pricingengine.ExecutionOnlyTools, ","); got != "get_price_book,get_price_books" {
-		t.Errorf("ExecutionOnlyTools = %s", got)
+	if got := strings.Join(pricingengine.DirectTools, ","); got != "list_products,list_skus,get_sku,list_brands" {
+		t.Errorf("DirectTools = %s", got)
 	}
 }
 

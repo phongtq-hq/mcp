@@ -47,7 +47,7 @@ Bảng bổ sung, mỗi bảng có lý do bắt buộc:
 | `idempotency_keys` | Yêu cầu idempotency ở API |
 | `outbox` | Phát sự kiện tin cậy không cần message broker (ADR-0003) |
 
-Tổng cộng 34 bảng (thêm `execution_delegation_sources`, `execution_delegation_targets` cho delegation và `plan_proposals` cho đề xuất kế hoạch, Agent Runtime sở hữu). Trước đó 31 bảng: thêm `mcp_tool_claims` (Phase 2, MCP Gateway sở hữu) để một tool có tác dụng phụ không chạy hai lần cho cùng một bước của task.
+Tổng cộng 36 bảng (thêm `mcp_execution_sensitive_reads` và `mcp_server_projects` ở 00040 / 00041 cho kiểm soát luồng dữ liệu và chính sách project; trước đó 34 bảng: thêm `execution_delegation_sources`, `execution_delegation_targets` cho delegation và `plan_proposals` cho đề xuất kế hoạch, Agent Runtime sở hữu). Trước đó 31 bảng: thêm `mcp_tool_claims` (Phase 2, MCP Gateway sở hữu) để một tool có tác dụng phụ không chạy hai lần cho cùng một bước của task.
 
 ## 3. Sơ đồ quan hệ
 
@@ -432,6 +432,7 @@ CREATE TABLE mcp_servers (
   status            TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','active','disabled','archived')),
   health_status     TEXT NOT NULL DEFAULT 'unknown' CHECK (health_status IN ('unknown','healthy','degraded','unreachable')),
   health_checked_at TIMESTAMPTZ,
+  project_scoped    BOOLEAN NOT NULL DEFAULT false,  -- 00041: chỉ dùng được ở project trong mcp_server_projects
   active_version_id UUID,               -- FK (id, active_version_id) → mcp_server_versions (server_id, id)
   created_by        UUID REFERENCES users(id),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -480,6 +481,7 @@ CREATE TABLE mcp_tools (
   timeout_ms        INT NOT NULL DEFAULT 30000 CHECK (timeout_ms BETWEEN 100 AND 600000),
   max_result_bytes  INT NOT NULL DEFAULT 65536 CHECK (max_result_bytes BETWEEN 1024 AND 4194304),
   unit_cost         NUMERIC(18,8) CHECK (unit_cost >= 0 AND unit_cost <> 'NaN'),
+  locked_at         TIMESTAMPTZ,        -- 00039: bị Registry tạm khoá (định nghĩa đổi), khác với người vận hành tắt
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   scope_org_id      UUID GENERATED ALWAYS AS (...) STORED,
@@ -770,6 +772,25 @@ CREATE TABLE mcp_tool_claims (
 Gateway chèn một dòng (`ON CONFLICT DO NOTHING`) trước khi gọi upstream cho mọi tool không chỉ đọc và mọi tool đã qua approval. Bước chạy lại gặp dòng đã có thì không gọi lại tool (trả `outcome_unknown`), trừ tool `side_effect = idempotent` của managed server với đúng cùng arguments. Số dòng của một task cũng là số tool call Gateway đã cho chạy, dùng để áp `max_tool_calls` của Agent Version. Bảng chỉ thêm (không role nào sửa hay xoá), RLS `FORCE`; dòng sống theo task.
 
 - `decisions` là JSONB vì số quyết định mỗi approval rất nhỏ (1–2) và luôn đọc cùng approval. Trạng thái `consumed` đánh dấu approval đã được dùng để thực thi, không dùng lại được.
+
+**Migration 00039–00041 (review bảo mật 2026-11-25; ADR-0018, security §5.4).**
+
+- `mcp_tools.locked_at`: `DisableToolsByID` (khoá vì định nghĩa đổi) đặt nó cùng `enabled = false`; phân loại tường minh (`enabled` khác null) xoá nó. Discovery của managed server dùng nó để phân biệt tool bị khoá với tool người vận hành đã tắt: version mới bật tool khi `enabled OR locked_at IS NOT NULL`, ngược lại giữ tắt. `UPDATE (locked_at)` cho `app_admin`, `app_api`.
+- `mcp_execution_sensitive_reads` (MCP Gateway sở hữu):
+
+```sql
+CREATE TABLE mcp_execution_sensitive_reads (
+  org_id        UUID NOT NULL REFERENCES organizations(id),
+  execution_id  UUID NOT NULL,
+  first_tool_id UUID NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, execution_id),
+  FOREIGN KEY (org_id, execution_id) REFERENCES agent_executions (org_id, id) ON DELETE CASCADE
+);
+```
+
+  Gateway chèn (`ON CONFLICT DO NOTHING`) trước khi gọi upstream của tool `data_sensitivity = sensitive` trong một execution, và đọc nó khi quyết định cho tool `egress`. Chỉ thêm (`app_gateway`: `SELECT`, `INSERT`; `app_admin`: `SELECT`), RLS `FORCE`.
+- `mcp_servers.project_scoped` + `mcp_server_projects (org_id, server_id, project_id, created_at)`, PK cả ba cột, khoá ngoại ghép tới `mcp_servers (scope_org_id, id)` và `projects (org_id, id)`, index `(org_id, project_id)`, RLS `FORCE`. `CHECK (NOT project_scoped OR org_id IS NOT NULL)`: server của platform không giới hạn theo project. Ghi chỉ qua `hqadmin mcp-server scope` (`app_admin`: `SELECT`, `INSERT`, `DELETE`, `UPDATE (project_scoped)`); `app_api`, `app_gateway` chỉ đọc. `ListActiveTools` lọc theo project khi được truyền.
 
 **Migration 00037.** Cấp lại `UPDATE (endpoint)` trên `mcp_servers` cho `app_admin` (00007 đã thu hồi vì khi đó chưa có đường đổi địa chỉ nào có audit). Đường duy nhất dùng quyền này là `hqadmin mcp-server set-endpoint` (mcp-platform §7). **Migration 00038:** trigger `mcp_servers_endpoint_managed_only` (BEFORE UPDATE OF endpoint) từ chối đổi `endpoint` của server có `kind` khác `managed`, với mọi role.
 

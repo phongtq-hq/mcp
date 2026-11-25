@@ -140,3 +140,18 @@ func TestAllowedByRules(t *testing.T) {
 		}
 	}
 }
+
+// Audit ghi số phần tử của các mảng cấp cao nhất (không chứa nội dung) để ước lượng phạm vi một lần đọc.
+func TestSanitizeCountsItems(t *testing.T) {
+	for text, want := range map[string]int{
+		`{"containers":[{"id":"a"},{"id":"b"}],"lines":["x","y","z"],"next_cursor":"c"}`: 5,
+		`{"ok":true}`:     0,
+		`không phải JSON`: -1,
+		`[1,2,3]`:         -1,
+	} {
+		_, o := sanitize(&mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, 1<<20)
+		if o.items != want {
+			t.Errorf("%s → %d, muốn %d", text, o.items, want)
+		}
+	}
+}

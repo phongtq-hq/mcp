@@ -19,7 +19,7 @@ import (
 	"github.com/hqgroups/mcp/internal/ai/provider"
 	"github.com/hqgroups/mcp/internal/integration/pricingengine"
 	"github.com/hqgroups/mcp/internal/integration/serve"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
+	"github.com/hqgroups/mcp/internal/mcp/registry"
 )
 
 // TestPricingEngineEndToEnd chạy integration Pricing Engine qua đúng đường của client bên
@@ -77,12 +77,12 @@ func TestPricingEngineEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(pe.Close)
 
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	client, err := pricingengine.NewClient(pe.URL, pricingengine.Options{APIKey: apiKey, AllowLoopbackHTTP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	up := httptest.NewServer(pricingengine.Handler(client, signer, e.orgA))
+	up := httptest.NewServer(pricingengine.Handler(client, signer.Verifier(), e.orgA))
 	t.Cleanup(up.Close)
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
@@ -177,6 +177,42 @@ func TestPricingEngineEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("price tools classified sensitive do not exist for external clients", func(t *testing.T) {
+		// Người vận hành gắn nhãn sensitive cho hai tool giá (runbook): từ đó Gateway tự thực
+		// thi mức sàn, không phụ thuộc việc integration có tự chặn hay không.
+		c, err := e.db.Admin.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Release()
+		sensitive := "sensitive"
+		for _, tool := range []string{"get_price_book", "get_price_books"} {
+			if err := adminops.ClassifyMCPTool(ctx, c.Conn(), adminops.MCPServer{OrgSlug: "org-a", Slug: pricingengine.Slug}, tool,
+				registry.Classification{DataSensitivity: &sensitive}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res, err := sess.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range res.Tools {
+			if strings.Contains(tool.Name, "price_book") {
+				t.Errorf("tool sensitive lộ ra cho client bên ngoài: %s", tool.Name)
+			}
+		}
+		if len(res.Tools) != 4 {
+			t.Errorf("client bên ngoài thấy %d tool, muốn 4 tool danh mục", len(res.Tools))
+		}
+		before := requests.Load()
+		if r, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "pricing-engine.get_price_book", Arguments: map[string]any{"sku": "HQ-FREEFIRE-GC-20"}}); err == nil && !r.IsError {
+			t.Errorf("gọi trực tiếp tool sensitive được: %s", text(r))
+		}
+		if n := requests.Load() - before; n != 0 {
+			t.Errorf("tool sensitive gọi trực tiếp vẫn tạo %d request tới PE", n)
+		}
+	})
+
 	t.Run("an agent execution reads price books through the gateway", func(t *testing.T) {
 		post := func(path string, body any, status int) map[string]any {
 			t.Helper()
@@ -255,6 +291,12 @@ func TestPricingEngineEndToEnd(t *testing.T) {
 		var ok int
 		if err := e.db.Admin.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE org_id = $1 AND action = 'mcp_tool.call' AND outcome = 'success' AND details->>'execution_id' = $2`, e.orgA, id).Scan(&ok); err != nil || ok != 2 {
 			t.Errorf("audit mcp_tool.call của execution = %d (%v), muốn 2", ok, err)
+		}
+		// Execution đã đọc dữ liệu sensitive: Gateway ghi lại, để mọi tool egress về sau của
+		// nó cần người duyệt (security §5.4).
+		var marked int
+		if err := e.db.Admin.QueryRow(ctx, `SELECT count(*) FROM mcp_execution_sensitive_reads WHERE org_id = $1 AND execution_id = $2`, e.orgA, id).Scan(&marked); err != nil || marked != 1 {
+			t.Errorf("execution đọc tool sensitive phải được đánh dấu: %d (%v)", marked, err)
 		}
 	})
 

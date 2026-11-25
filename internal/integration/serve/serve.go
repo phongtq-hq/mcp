@@ -7,8 +7,10 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -52,41 +54,44 @@ const (
 const ErrExecutionOnly = "tool này chỉ chạy trong một execution của Agent; không gọi trực tiếp được qua Gateway"
 
 type config struct {
-	executionOnly map[string]bool
+	direct map[string]bool
 }
 
 // Option là tuỳ chọn của Handler.
 type Option func(*config)
 
-// ExecutionOnly khai những tool chỉ chạy trong một execution: tool call mang ngữ cảnh
-// KindCall KHÔNG có ExecutionID (client bên ngoài gọi thẳng qua Gateway bằng token OIDC hay
-// API key) nhận một kết quả lỗi và handler của tool không chạy. Dùng cho tool trả dữ liệu
-// nhạy cảm, nơi mọi lần đọc phải nằm trong một execution: có Agent Version liệt kê tool đó,
-// có budget, có execution_steps.
+// Direct khai những tool được gọi TRỰC TIẾP: tool call mang ngữ cảnh KindCall không có
+// ExecutionID (client bên ngoài gọi thẳng qua Gateway bằng token OIDC hay API key).
+//
+// Mặc định mọi tool chỉ chạy trong một execution của Agent (ADR-0018): có Agent Version
+// liệt kê tool đó, có budget, có execution_steps. Chỉ khai Direct cho tool trả siêu dữ
+// liệu ít nhạy cảm (danh sách, trạng thái, số đo); tool trả log, văn bản tự do do bên
+// ngoài viết hay dữ liệu kinh doanh thì không. Mặc định an toàn để integration mới quên
+// khai thì đóng, không mở.
 //
 // Đây là mức sàn ở phía server, không thay cho policy của Gateway: ExecutionID là thứ
-// Gateway ký sau khi đã kiểm task (GetActiveTask), server chỉ kiểm chữ ký. Giống luật
-// discovery, nó được thực thi bằng middleware trong MCP SDK, trên method và tên tool mà
-// chính SDK đã đọc ra, không bằng cách tự đọc body. tools/list vẫn liệt kê các tool này.
-func ExecutionOnly(tools ...string) Option {
+// Gateway ký sau khi đã kiểm task (GetActiveTask), server chỉ kiểm chữ ký. Luật được thực
+// thi bằng middleware trong MCP SDK, trên method và tên tool mà chính SDK đã đọc ra,
+// không bằng cách tự đọc body. tools/list vẫn liệt kê mọi tool.
+func Direct(tools ...string) Option {
 	return func(c *config) {
-		if c.executionOnly == nil {
-			c.executionOnly = map[string]bool{}
+		if c.direct == nil {
+			c.direct = map[string]bool{}
 		}
 		for _, t := range tools {
-			c.executionOnly[t] = true
+			c.direct[t] = true
 		}
 	}
 }
 
-// executionOnly từ chối tools/call tới các tool đã khai. Request không đọc được tên tool
-// cũng bị từ chối (fail-closed).
-func executionOnly(tools map[string]bool) mcp.Middleware {
+// directOnly từ chối tools/call tới tool không nằm trong danh sách Direct. Request không
+// đọc được tên tool cũng bị từ chối (fail-closed).
+func directOnly(allowed map[string]bool) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method == "tools/call" {
 				params, ok := req.GetParams().(*mcp.CallToolParamsRaw)
-				if !ok || tools[params.Name] {
+				if !ok || !allowed[params.Name] {
 					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: ErrExecutionOnly}}}, nil
 				}
 			}
@@ -96,8 +101,10 @@ func executionOnly(tools map[string]bool) mcp.Middleware {
 }
 
 // Handler trả về HTTP handler của một managed MCP server: MCP Streamable HTTP không trạng
-// thái, chỉ nhận request mang ngữ cảnh do Gateway ký cho đúng server này (slug là aud).
-// Server không nhận và không kiểm token của người dùng; quyết định quyền thuộc về Gateway.
+// thái, chỉ nhận request mang ngữ cảnh do Gateway ký cho đúng server này (slug là aud),
+// đúng body này, và chưa dùng lần nào. Server không nhận và không kiểm token của người
+// dùng; quyết định quyền thuộc về Gateway. Server chỉ giữ khoá CÔNG KHAI (verifier): nó
+// không ký được ngữ cảnh, nên bị chiếm quyền cũng không gọi được integration khác.
 //
 // Server thuộc về đúng một organization (orgID): tool call thay mặt org khác bị từ chối
 // kể cả khi chữ ký hợp lệ; orgID rỗng thì mọi tool call bị từ chối. Nhờ vậy đăng ký nhầm
@@ -106,11 +113,12 @@ func executionOnly(tools map[string]bool) mcp.Middleware {
 // Ngữ cảnh discovery (không gắn tenant) chỉ đọc được danh sách tool. Luật đó được thực thi
 // bằng một mcp.Server riêng có middleware từ chối mọi method khác, KHÔNG bằng cách tự đọc
 // body để đoán method: hai trình đọc JSON hiểu cùng một body theo hai cách (khoá "Method"
-// viết hoa, khoá trùng) từng cho phép ngữ cảnh discovery gọi tool. newServer được gọi hai
-// lần (ba lần khi có ExecutionOnly), mỗi lần phải trả về một server mới với cùng tập tool.
+// viết hoa, khoá trùng) từng cho phép ngữ cảnh discovery gọi tool. newServer được gọi ba
+// lần, mỗi lần phải trả về một server mới với cùng tập tool. Body chỉ được đọc để so hash
+// với ngữ cảnh, không để phân quyền.
 //
-// Tuỳ chọn ExecutionOnly thêm một lớp nữa cho những tool được nêu tên; xem ở đó.
-func Handler(slug string, signer *signedctx.Signer, orgID uuid.UUID, newServer func() *mcp.Server, opts ...Option) http.Handler {
+// Tool call không thuộc execution chỉ chạy được tool khai bằng Direct; xem ở đó.
+func Handler(slug string, verifier *signedctx.Verifier, orgID uuid.UUID, newServer func() *mcp.Server, opts ...Option) http.Handler {
 	var cfg config
 	for _, opt := range opts {
 		opt(&cfg)
@@ -118,13 +126,9 @@ func Handler(slug string, signer *signedctx.Signer, orgID uuid.UUID, newServer f
 	calls := newServer()
 	discovery := newServer()
 	discovery.AddReceivingMiddleware(discoveryOnly)
-	// direct phục vụ tool call KHÔNG thuộc execution nào. Không có tuỳ chọn ExecutionOnly thì
-	// nó chính là calls: hành vi của các integration không dùng tuỳ chọn không đổi.
-	direct := calls
-	if len(cfg.executionOnly) > 0 {
-		direct = newServer()
-		direct.AddReceivingMiddleware(executionOnly(cfg.executionOnly))
-	}
+	direct := newServer()
+	direct.AddReceivingMiddleware(directOnly(cfg.direct))
+	replay := signedctx.NewReplayGuard(0)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		switch route, _ := r.Context().Value(kindKey{}).(string); route {
 		case routeExecution:
@@ -135,8 +139,14 @@ func Handler(slug string, signer *signedctx.Signer, orgID uuid.UUID, newServer f
 		return discovery // mọi trường hợp khác: server chỉ liệt kê được tool
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBody})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sc, err := signer.Verify(r.Header.Get(signedctx.Header), slug, time.Now())
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
 		if err != nil {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		now := time.Now()
+		sc, err := verifier.Verify(r.Header.Get(signedctx.Header), slug, body, now)
+		if err != nil || !replay.Accept(sc, now) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -159,6 +169,25 @@ func Handler(slug string, signer *signedctx.Signer, orgID uuid.UUID, newServer f
 				route = routeExecution
 			}
 		}
-		mcpHandler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), kindKey{}, route)))
+		r = r.WithContext(context.WithValue(r.Context(), kindKey{}, route))
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		mcpHandler.ServeHTTP(w, r)
 	})
+}
+
+// VerifierFromEnv đọc khoá công khai kiểm ngữ cảnh của Gateway từ HQ_SERVICE_VERIFY_KEY
+// (hex, `hqadmin service-key public`). Managed server KHÔNG được giữ khoá ký: nếu
+// HQ_SERVICE_SIGNING_KEY có mặt trong môi trường của nó, process từ chối khởi động, để
+// một cấu hình sai (chép nguyên file env của gateway) không biến integration thành bên ký
+// được ngữ cảnh cho mọi integration khác (ADR-0018). Thông báo lỗi không chứa giá trị khoá.
+func VerifierFromEnv(getenv func(string) string) (*signedctx.Verifier, error) {
+	if getenv("HQ_SERVICE_SIGNING_KEY") != "" {
+		return nil, errors.New("HQ_SERVICE_SIGNING_KEY không được đặt cho managed server: nó chỉ cần khoá công khai HQ_SERVICE_VERIFY_KEY")
+	}
+	pub, err := signedctx.ParseVerifyKey(getenv("HQ_SERVICE_VERIFY_KEY"))
+	if err != nil {
+		return nil, errors.New("HQ_SERVICE_VERIFY_KEY: " + err.Error())
+	}
+	return signedctx.NewVerifier(pub)
 }

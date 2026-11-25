@@ -27,7 +27,19 @@ const (
 // perMinute là hạn mức của từng lớp, tính theo request mỗi phút cho mỗi principal.
 // Discovery là thao tác quản trị: mỗi lần là một loạt request ra một host ngoài, nên
 // hạn mức của nó thấp hơn nhiều.
-var perMinute = map[string]int{classMCP: defaultRateLimit, classModel: defaultRateLimit, classDiscovery: 6}
+//
+// Mỗi lớp còn một hạn mức chung cho cả organization (khoá "<lớp>:org", principal rỗng):
+// một org có nhiều API key / người dùng không nhân được hạn mức để đọc hàng loạt dữ liệu
+// của hệ thống nội bộ (review bảo mật 2026-11-25). Hạn mức org đủ cho 8 execution song
+// song (trần theo org của runtime) cộng client bên ngoài. Chỉ áp cho client bên ngoài và
+// discovery (xem limit).
+var perMinute = map[string]int{
+	classMCP: defaultRateLimit, classModel: defaultRateLimit, classDiscovery: 6,
+	classMCP + orgSuffix: 10 * defaultRateLimit, classModel + orgSuffix: 10 * defaultRateLimit, classDiscovery + orgSuffix: 30,
+}
+
+// orgSuffix là hậu tố của lớp hạn mức chung cho cả organization.
+const orgSuffix = ":org"
 
 // Limiter giới hạn tần suất request theo organization, principal và lớp request.
 type Limiter interface {
@@ -50,12 +62,16 @@ func newMemoryLimiter() *memoryLimiter {
 	return m
 }
 
-func (m *memoryLimiter) Allow(_ context.Context, _, principalID uuid.UUID, class string) (bool, time.Duration, error) {
+func (m *memoryLimiter) Allow(_ context.Context, orgID, principalID uuid.UUID, class string) (bool, time.Duration, error) {
 	l, ok := m.classes[class]
 	if !ok {
 		return false, 0, fmt.Errorf("gateway: lớp rate limit không xác định: %q", class)
 	}
-	allowed, wait := l.allow(principalID, time.Now())
+	key := principalID
+	if key == uuid.Nil {
+		key = orgID // hạn mức chung của organization
+	}
+	allowed, wait := l.allow(key, time.Now())
 	return allowed, wait, nil
 }
 
@@ -99,8 +115,17 @@ func (g *Gateway) SetLimiter(l Limiter) { g.limits = l }
 
 // limit áp hạn mức cho principal. Trả về false nếu đã ghi phản hồi lỗi. Không kiểm tra
 // được hạn mức thì từ chối (fail-closed): rate limit là một lớp bảo vệ, không phải tối ưu.
-func (g *Gateway) limit(w http.ResponseWriter, r *http.Request, p identity.Principal, class string) bool {
+//
+// orgWide: áp thêm hạn mức chung của organization. Chỉ cho client bên ngoài (token OIDC,
+// API key) và discovery: một org có nhiều API key không nhân được hạn mức để đọc hàng loạt.
+// Lời gọi của execution không bị áp, để vài client ồn ào không làm mọi execution của org
+// nhận 429; execution đã có trần riêng (8 vòng lặp Agent đồng thời mỗi org).
+func (g *Gateway) limit(w http.ResponseWriter, r *http.Request, p identity.Principal, class string, orgWide bool) bool {
 	ok, wait, err := g.limits.Allow(r.Context(), p.OrgID, p.ID, class)
+	if err == nil && ok && orgWide {
+		// Hạn mức chung của organization (principal rỗng).
+		ok, wait, err = g.limits.Allow(r.Context(), p.OrgID, uuid.Nil, class+orgSuffix)
+	}
 	if err != nil {
 		httpx.LogError(r.Context(), "gateway: không kiểm tra được rate limit", err)
 		w.Header().Set("Retry-After", "1")

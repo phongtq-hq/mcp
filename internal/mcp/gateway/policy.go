@@ -33,6 +33,14 @@ type policyInput struct {
 	// ModelPlanned: task thuộc một kế hoạch do Agent lập kế hoạch đề xuất và platform chạy
 	// thẳng từ đề xuất: `goal` của nó cũng là output của model.
 	ModelPlanned bool
+	// Sensitive: tool có data_sensitivity = sensitive (giá vốn, dữ liệu khách hàng…).
+	Sensitive bool
+	// Egress: tool gửi dữ liệu ra khỏi platform: tool khai egress, hoặc mọi tool của MCP
+	// server ngoài (server do tenant đăng ký luôn được coi là egress, dữ liệu của org
+	// không tắt được điều đó).
+	Egress bool
+	// ReadSensitive: execution của lời gọi đã đọc ít nhất một tool sensitive.
+	ReadSensitive bool
 }
 
 // policyDecision là kết quả, kèm quy tắc đã khớp (ghi vào audit).
@@ -54,6 +62,24 @@ func decide(in policyInput) policyDecision {
 	if !in.Enabled {
 		return policyDecision{effectDeny, "tool_disabled"}
 	}
+	// Mức sàn của platform: dữ liệu sensitive chỉ đọc được trong một execution (có Agent
+	// Version liệt kê tool, có budget, có execution_steps). Client bên ngoài gọi thẳng
+	// qua Gateway thì không, bất kể integration có tự chặn hay không.
+	if in.Sensitive && !in.Internal {
+		return policyDecision{effectDeny, "sensitive_requires_execution"}
+	}
+	d := decideRisk(in)
+	// Mức sàn của platform (security §5.4): execution đã đọc dữ liệu sensitive mà gọi
+	// tool egress thì cần người duyệt. Prompt injection trong một kết quả tool (issue
+	// GitHub, dòng log) không đẩy được giá vốn ra một server ngoài mà không ai thấy.
+	if d.Effect == effectAllow && in.Internal && in.Egress && in.ReadSensitive {
+		return policyDecision{effectRequireApproval, "sensitive_then_egress_requires_approval"}
+	}
+	return d
+}
+
+// decideRisk là ma trận theo mức rủi ro.
+func decideRisk(in policyInput) policyDecision {
 	switch in.Risk {
 	case riskRead:
 		if in.AgentRequiresApproval && in.Internal {

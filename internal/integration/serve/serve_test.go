@@ -20,9 +20,22 @@ import (
 const slug = "serve-test"
 
 var (
-	testKey = []byte(strings.Repeat("k", 32))
-	testOrg = uuid.New()
+	testSeed = strings.Repeat("6b", 32)
+	testOrg  = uuid.New()
 )
+
+func mustSigner(t *testing.T, hexSeed string) *signedctx.Signer {
+	t.Helper()
+	priv, err := signedctx.ParseSigningKey(hexSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := signedctx.NewSigner(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 type in struct{}
 
@@ -40,7 +53,7 @@ type fixture struct {
 func newFixture(t *testing.T, opts ...serve.Option) *fixture {
 	t.Helper()
 	f := &fixture{}
-	f.signer, _ = signedctx.NewSigner(testKey)
+	f.signer = mustSigner(t, testSeed)
 	newServer := func() *mcp.Server {
 		s := mcp.NewServer(&mcp.Implementation{Name: "serve-test", Version: "0"}, nil)
 		mcp.AddTool(s, &mcp.Tool{Name: "get_guarded"}, func(context.Context, *mcp.CallToolRequest, in) (*mcp.CallToolResult, out, error) {
@@ -53,27 +66,20 @@ func newFixture(t *testing.T, opts ...serve.Option) *fixture {
 		})
 		return s
 	}
-	hs := httptest.NewServer(serve.Handler(slug, f.signer, testOrg, newServer, opts...))
+	hs := httptest.NewServer(serve.Handler(slug, f.signer.Verifier(), testOrg, newServer, opts...))
 	t.Cleanup(hs.Close)
 	f.url = hs.URL
 	return f
 }
 
-func (f *fixture) sign(c signedctx.Context) string {
+// sign ký c cho đúng body.
+func (f *fixture) sign(c signedctx.Context, body string) string {
 	c.Audience = slug
-	return f.signer.Sign(c, time.Now())
+	return f.signer.SignBody(c, []byte(body), time.Now())
 }
 
 func call(org uuid.UUID, execution *uuid.UUID) signedctx.Context {
 	return signedctx.Context{Kind: signedctx.KindCall, OrgID: org, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString(), ExecutionID: execution}
-}
-
-type headerTransport struct{ value func() string }
-
-func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(signedctx.Header, h.value())
-	return http.DefaultTransport.RoundTrip(r)
 }
 
 func (f *fixture) session(t *testing.T, c signedctx.Context) *mcp.ClientSession {
@@ -81,13 +87,18 @@ func (f *fixture) session(t *testing.T, c signedctx.Context) *mcp.ClientSession 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
 		Endpoint: f.url, DisableStandaloneSSE: true, MaxRetries: -1,
-		HTTPClient: &http.Client{Transport: headerTransport{func() string { return f.sign(c) }}},
+		HTTPClient: &http.Client{Transport: &signedctx.Transport{Signer: f.signer, Context: withAud(c)}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 	return sess
+}
+
+func withAud(c signedctx.Context) signedctx.Context {
+	c.Audience = slug
+	return c
 }
 
 // refused: lời gọi bị từ chối (lỗi giao thức hoặc kết quả isError).
@@ -121,21 +132,35 @@ func (f *fixture) post(header, body string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Không có tuỳ chọn: hành vi cũ. Tool call của org sở hữu chạy được dù có execution hay
-// không; discovery chỉ liệt kê; org khác và chữ ký sai bị từ chối.
-func TestHandlerWithoutOptions(t *testing.T) {
+// Không có tuỳ chọn: mọi tool chỉ chạy trong execution (mặc định an toàn); discovery chỉ
+// liệt kê; org khác và chữ ký sai bị từ chối.
+func TestHandlerDefaultsToExecutionOnly(t *testing.T) {
 	f := newFixture(t)
 	exec := uuid.New()
-	for name, c := range map[string]signedctx.Context{"trực tiếp": call(testOrg, nil), "trong execution": call(testOrg, &exec)} {
-		sess := f.session(t, c)
-		for _, tool := range []string{"get_guarded", "get_open"} {
-			if bad, text := refused(sess, tool); bad {
-				t.Errorf("%s: %s bị từ chối: %s", name, tool, text)
-			}
+	direct := f.session(t, call(testOrg, nil))
+	for _, tool := range []string{"get_guarded", "get_open"} {
+		bad, text := refused(direct, tool)
+		if !bad || !strings.Contains(text, serve.ErrExecutionOnly) {
+			t.Errorf("trực tiếp: %s phải bị từ chối rõ ràng: %v %q", tool, bad, text)
 		}
 	}
-	if f.guarded.Load() != 2 || f.open.Load() != 2 {
-		t.Errorf("handler chạy %d / %d lần, muốn 2 / 2", f.guarded.Load(), f.open.Load())
+	// tools/list không đổi: Registry và client vẫn thấy đủ tool.
+	if tools, err := direct.ListTools(context.Background(), nil); err != nil || len(tools.Tools) != 2 {
+		t.Errorf("tools/list trực tiếp phải liệt kê 2 tool: %v", err)
+	}
+	inExec := f.session(t, call(testOrg, &exec))
+	for _, tool := range []string{"get_guarded", "get_open"} {
+		if bad, text := refused(inExec, tool); bad {
+			t.Errorf("trong execution: %s bị từ chối: %s", tool, text)
+		}
+	}
+	if f.guarded.Load() != 1 || f.open.Load() != 1 {
+		t.Errorf("handler chạy %d / %d lần, muốn 1 / 1", f.guarded.Load(), f.open.Load())
+	}
+	// ExecutionID rỗng (nil UUID) không phải một execution.
+	zero := uuid.Nil
+	if bad, _ := refused(f.session(t, call(testOrg, &zero)), "get_guarded"); !bad {
+		t.Error("ExecutionID rỗng được coi là execution")
 	}
 
 	disc := f.session(t, signedctx.Context{Kind: signedctx.KindDiscovery})
@@ -146,39 +171,29 @@ func TestHandlerWithoutOptions(t *testing.T) {
 		t.Error("ngữ cảnh discovery gọi được tool")
 	}
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_open","arguments":{}}}`
-	if status, _ := f.post(f.sign(call(uuid.New(), &exec)), body); status != http.StatusForbidden {
+	if status, _ := f.post(f.sign(call(uuid.New(), &exec), body), body); status != http.StatusForbidden {
 		t.Errorf("org khác: status %d, muốn 403", status)
 	}
 	if status, _ := f.post("", body); status != http.StatusUnauthorized {
 		t.Errorf("thiếu ngữ cảnh: status %d, muốn 401", status)
 	}
-	if f.open.Load() != 2 {
+	if f.open.Load() != 1 {
 		t.Errorf("request bị từ chối vẫn chạy handler (%d lần)", f.open.Load())
 	}
 }
 
-// ExecutionOnly: tool đã khai chỉ chạy khi ngữ cảnh đã ký mang ExecutionID; tool khác không đổi.
-func TestExecutionOnly(t *testing.T) {
-	f := newFixture(t, serve.ExecutionOnly("get_guarded"))
+// Direct: tool đã khai gọi trực tiếp được; tool khác vẫn chỉ chạy trong execution.
+func TestDirect(t *testing.T) {
+	f := newFixture(t, serve.Direct("get_open"))
 	exec := uuid.New()
 
 	direct := f.session(t, call(testOrg, nil))
 	bad, text := refused(direct, "get_guarded")
 	if !bad || !strings.Contains(text, serve.ErrExecutionOnly) {
-		t.Errorf("gọi trực tiếp tool chỉ-execution phải bị từ chối rõ ràng: %v %q", bad, text)
+		t.Errorf("gọi trực tiếp tool không khai Direct phải bị từ chối rõ ràng: %v %q", bad, text)
 	}
 	if bad, text := refused(direct, "get_open"); bad {
-		t.Errorf("tool không khai phải gọi trực tiếp được: %s", text)
-	}
-	// tools/list không đổi: Registry và client vẫn thấy đủ tool.
-	if tools, err := direct.ListTools(context.Background(), nil); err != nil || len(tools.Tools) != 2 {
-		t.Errorf("tools/list trực tiếp phải liệt kê 2 tool: %v", err)
-	}
-
-	// ExecutionID rỗng (nil UUID) không phải một execution.
-	zero := uuid.Nil
-	if bad, _ := refused(f.session(t, call(testOrg, &zero)), "get_guarded"); !bad {
-		t.Error("ExecutionID rỗng được coi là execution")
+		t.Errorf("tool khai Direct phải gọi trực tiếp được: %s", text)
 	}
 
 	// Body mơ hồ (khoá trùng, khoá viết hoa): tên mà middleware xét là tên SDK thực thi, nên
@@ -189,8 +204,12 @@ func TestExecutionOnly(t *testing.T) {
 		`{"name":"get_open","name":"get_guarded","arguments":{}}`,
 		`{"name":"get_guarded","name":"get_open","arguments":{}}`,
 	} {
-		f.post(f.sign(call(testOrg, nil)), `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":`+params+`}`)
-		f.post(f.sign(call(testOrg, nil)), `{"jsonrpc":"2.0","id":1,"Method":"tools/call","method":"tools/list","params":`+params+`}`)
+		for _, body := range []string{
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` + params + `}`,
+			`{"jsonrpc":"2.0","id":1,"Method":"tools/call","method":"tools/list","params":` + params + `}`,
+		} {
+			f.post(f.sign(call(testOrg, nil), body), body)
+		}
 	}
 	if n := f.guarded.Load(); n != 0 {
 		t.Fatalf("handler của tool chỉ-execution đã chạy %d lần ngoài execution", n)
@@ -205,16 +224,32 @@ func TestExecutionOnly(t *testing.T) {
 	if n := f.guarded.Load(); n != 1 {
 		t.Errorf("handler của tool chỉ-execution chạy %d lần, muốn 1", n)
 	}
+}
 
-	// Luật cũ vẫn giữ: discovery chỉ liệt kê; org khác bị từ chối kể cả khi có execution.
-	if bad, _ := refused(f.session(t, signedctx.Context{Kind: signedctx.KindDiscovery}), "get_open"); !bad {
-		t.Error("ngữ cảnh discovery gọi được tool")
+// Ngữ cảnh gắn với đúng một request: body khác, dùng lần hai, ký bằng khoá khác (kể cả
+// một bên chỉ có khoá công khai không thể ký) đều bị từ chối trước khi tool chạy.
+func TestRequestBinding(t *testing.T) {
+	f := newFixture(t)
+	exec := uuid.New()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_open","arguments":{}}}`
+	other := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_guarded","arguments":{}}}`
+
+	header := f.sign(call(testOrg, &exec), body)
+	if status, resp := f.post(header, body); status != http.StatusOK {
+		t.Fatalf("lần đầu: %d %s", status, resp)
 	}
-	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_guarded","arguments":{}}}`
-	if status, _ := f.post(f.sign(call(uuid.New(), &exec)), body); status != http.StatusForbidden {
-		t.Errorf("org khác: status %d, muốn 403", status)
+	if status, _ := f.post(header, body); status != http.StatusUnauthorized {
+		t.Errorf("dùng lại header: status %d, muốn 401", status)
 	}
-	if n := f.guarded.Load(); n != 1 {
-		t.Errorf("org khác chạy được tool chỉ-execution (%d)", n)
+	if status, _ := f.post(f.sign(call(testOrg, &exec), body), other); status != http.StatusUnauthorized {
+		t.Errorf("header của body khác: status %d, muốn 401", status)
+	}
+	stranger := mustSigner(t, strings.Repeat("5a", 32))
+	c := withAud(call(testOrg, &exec))
+	if status, _ := f.post(stranger.SignBody(c, []byte(other), time.Now()), other); status != http.StatusUnauthorized {
+		t.Errorf("ký bằng khoá khác: status %d, muốn 401", status)
+	}
+	if f.open.Load() != 1 || f.guarded.Load() != 0 {
+		t.Errorf("handler chạy %d / %d lần, muốn 1 / 0", f.open.Load(), f.guarded.Load())
 	}
 }

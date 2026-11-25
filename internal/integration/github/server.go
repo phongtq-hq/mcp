@@ -323,9 +323,17 @@ func NewServer(client *Client) *mcp.Server {
 	return s
 }
 
+// DirectTools là các tool client bên ngoài gọi trực tiếp được qua Gateway (serve.Direct);
+// tool khác chỉ chạy trong một execution của Agent. Chỉ hai tool không trả văn bản do người
+// ngoài viết: danh sách repo trong allowlist và trạng thái check của một commit. Tiêu đề và
+// thân PR / issue, commit message, tên lần chạy workflow (lấy từ commit message) đều do bất
+// kỳ ai có quyền đẩy code hay mở PR viết, là nguồn prompt injection: chỉ chạy trong execution.
+var DirectTools = []string{"list_repositories", "get_commit_status"}
+
 // Handler trả về HTTP handler của server: chỉ nhận request mang ngữ cảnh do Gateway ký cho
 // đúng server này; một tài khoản GitHub (token + allowlist) thuộc về đúng một organization
 // (orgID); ngữ cảnh discovery chỉ đọc được danh sách tool. Xem internal/integration/serve.
-func Handler(client *Client, signer *signedctx.Signer, orgID uuid.UUID) http.Handler {
-	return serve.Handler(Slug, signer, orgID, func() *mcp.Server { return NewServer(client) })
+func Handler(client *Client, verifier *signedctx.Verifier, orgID uuid.UUID) http.Handler {
+	return serve.Handler(Slug, verifier, orgID, func() *mcp.Server { return NewServer(client) },
+		serve.Direct(DirectTools...))
 }

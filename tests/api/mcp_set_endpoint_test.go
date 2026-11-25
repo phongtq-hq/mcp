@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hqgroups/mcp/internal/adminops"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // TestSetManagedEndpoint: đổi địa chỉ của một managed MCP server (ví dụ chuyển từ chạy
@@ -15,7 +14,7 @@ import (
 func TestSetManagedEndpoint(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

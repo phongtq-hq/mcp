@@ -214,9 +214,15 @@ func NewServer(client *Client) *mcp.Server {
 	return s
 }
 
+// DirectTools là các tool client bên ngoài gọi trực tiếp được qua Gateway (serve.Direct);
+// tool khác chỉ chạy trong một execution của Agent. query_logs (dòng log) và query_metric (kết quả LogQL theo nhãn) chỉ chạy trong execution.
+var DirectTools = []string{"list_labels", "list_label_values"}
+
 // Handler trả về HTTP handler của server: chỉ nhận request mang ngữ cảnh do Gateway ký cho
 // đúng server này; một Loki thuộc về đúng một organization (orgID); ngữ cảnh discovery
-// chỉ đọc được danh sách tool. Xem internal/integration/serve.
-func Handler(client *Client, signer *signedctx.Signer, orgID uuid.UUID) http.Handler {
-	return serve.Handler(Slug, signer, orgID, func() *mcp.Server { return NewServer(client) })
+// chỉ đọc được danh sách tool; tool ngoài DirectTools chỉ chạy trong execution. Xem
+// internal/integration/serve.
+func Handler(client *Client, verifier *signedctx.Verifier, orgID uuid.UUID) http.Handler {
+	return serve.Handler(Slug, verifier, orgID, func() *mcp.Server { return NewServer(client) },
+		serve.Direct(DirectTools...))
 }

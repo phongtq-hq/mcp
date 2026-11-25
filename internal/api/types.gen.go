@@ -2011,8 +2011,12 @@ type Execution struct {
 		Id   *openapi_types.UUID     `json:"id,omitempty"`
 		Type *ExecutionInitiatorType `json:"type,omitempty"`
 	} `json:"initiator,omitempty"`
-	Input  *map[string]interface{} `json:"input,omitempty"`
-	Mode   ExecutionMode           `json:"mode"`
+
+	// Input Vắng mặt khi người gọi không có `execution:read_content` trong project (chỉ có `execution:read`)
+	Input *map[string]interface{} `json:"input,omitempty"`
+	Mode  ExecutionMode           `json:"mode"`
+
+	// Output Câu trả lời của Agent, có thể trích dữ liệu nó đã đọc. Vắng mặt khi người gọi không có `execution:read_content`
 	Output *map[string]interface{} `json:"output,omitempty"`
 
 	// PauseRequestedAt Khác null khi execution đang có yêu cầu tạm dừng, kể cả khi `status` chưa là `paused` (ví dụ đang `waiting_approval`, hoặc bước hiện tại chưa xong)
@@ -2602,22 +2606,28 @@ type StepKind string
 
 // Task defines model for Task.
 type Task struct {
-	AgentId       openapi_types.UUID      `json:"agent_id"`
-	AgentVersion  int                     `json:"agent_version"`
-	Budget        *Money                  `json:"budget,omitempty"`
-	DependsOn     *[]openapi_types.UUID   `json:"depends_on,omitempty"`
-	Depth         int                     `json:"depth"`
-	Error         *Problem                `json:"error,omitempty"`
-	EstimatedCost *Money                  `json:"estimated_cost,omitempty"`
-	ExecutionId   openapi_types.UUID      `json:"execution_id"`
-	FinishedAt    *time.Time              `json:"finished_at,omitempty"`
-	Goal          string                  `json:"goal"`
-	Id            openapi_types.UUID      `json:"id"`
-	Iterations    *int                    `json:"iterations,omitempty"`
-	OnFailure     *TaskOnFailure          `json:"on_failure,omitempty"`
-	Output        *map[string]interface{} `json:"output,omitempty"`
-	OutputSummary *string                 `json:"output_summary,omitempty"`
-	ParentTaskId  *openapi_types.UUID     `json:"parent_task_id,omitempty"`
+	AgentId       openapi_types.UUID    `json:"agent_id"`
+	AgentVersion  int                   `json:"agent_version"`
+	Budget        *Money                `json:"budget,omitempty"`
+	DependsOn     *[]openapi_types.UUID `json:"depends_on,omitempty"`
+	Depth         int                   `json:"depth"`
+	Error         *Problem              `json:"error,omitempty"`
+	EstimatedCost *Money                `json:"estimated_cost,omitempty"`
+	ExecutionId   openapi_types.UUID    `json:"execution_id"`
+	FinishedAt    *time.Time            `json:"finished_at,omitempty"`
+
+	// Goal Chuỗi rỗng khi người gọi không có `execution:read_content`
+	Goal       string             `json:"goal"`
+	Id         openapi_types.UUID `json:"id"`
+	Iterations *int               `json:"iterations,omitempty"`
+	OnFailure  *TaskOnFailure     `json:"on_failure,omitempty"`
+
+	// Output Vắng mặt khi người gọi không có `execution:read_content`
+	Output *map[string]interface{} `json:"output,omitempty"`
+
+	// OutputSummary Vắng mặt khi người gọi không có `execution:read_content`
+	OutputSummary *string             `json:"output_summary,omitempty"`
+	ParentTaskId  *openapi_types.UUID `json:"parent_task_id,omitempty"`
 
 	// PlanKey `id` của task trong kế hoạch (execution `planned`)
 	PlanKey   *string    `json:"plan_key,omitempty"`

@@ -53,11 +53,12 @@ func routes(ctx context.Context, mux *http.ServeMux, deps process.Deps) error {
 	if err != nil {
 		return err
 	}
-	key, err := signedctx.ParseKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
+	priv, err := signedctx.ParseSigningKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
 	if err != nil {
 		return fmt.Errorf("gateway: HQ_SERVICE_SIGNING_KEY: %w", err)
 	}
-	signer, err := signedctx.NewSigner(key)
+	key := priv.Seed()
+	signer, err := signedctx.NewSigner(priv)
 	if err != nil {
 		return err
 	}

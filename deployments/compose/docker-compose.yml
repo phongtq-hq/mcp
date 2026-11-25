@@ -227,7 +227,8 @@ services:
       HQ_HTTP_ADDR: ":8090"
       HQ_DOCKER_API_URL: http://docker-proxy-internal:2375
       HQ_DOCKER_ORG_ID: ${HQ_DOCKER_ORG_ID:-}
-      HQ_SERVICE_SIGNING_KEY: ${HQ_SERVICE_SIGNING_KEY:-}
+      # Chỉ khoá công khai (`make admin ARGS="service-key public"`), ADR-0018.
+      HQ_SERVICE_VERIFY_KEY: ${HQ_SERVICE_VERIFY_KEY:-}
     ports: ["127.0.0.1:8090:8090"]
     depends_on:
       docker-proxy-internal: {condition: service_started}

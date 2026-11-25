@@ -36,7 +36,7 @@ func TestMeasure(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	adminA := e.tok("admin-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

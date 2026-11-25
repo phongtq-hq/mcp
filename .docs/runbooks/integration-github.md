@@ -31,7 +31,7 @@ Server chỉ gửi `GET`, chỉ tới các đường dẫn sau dưới `/repos/{
 | `HQ_GITHUB_REPOSITORIES` | Có | Allowlist `owner/repo`, phân tách dấu phẩy, tối đa 200. Không có wildcard: mỗi repository phải được liệt kê |
 | `HQ_GITHUB_TOKEN_FILE` | Có | Đường dẫn file chứa token GitHub chỉ đọc (xem mục 3). Token không bao giờ vào kết quả tool, thông báo lỗi hay log |
 | `HQ_GITHUB_ORG_ID` | Có | Id của organization (của platform) sở hữu tài khoản GitHub này. Tool call thay mặt org khác bị từ chối |
-| `HQ_SERVICE_SIGNING_KEY` | Có | Khoá ký ngữ cảnh dùng chung với Gateway (hex, ≥ 32 byte) |
+| `HQ_SERVICE_VERIFY_KEY` | Có | Khoá CÔNG KHAI kiểm ngữ cảnh của Gateway (Ed25519, hex 64 ký tự; `hqadmin service-key public`). Server từ chối khởi động nếu được cấp `HQ_SERVICE_SIGNING_KEY` (ADR-0018) |
 | `HQ_GITHUB_API_URL` | Không | Địa chỉ gốc của REST API. Mặc định `https://api.github.com`; GitHub Enterprise Server: `https://HOST/api/v3`. Bắt buộc `https` trừ khi `HQ_ENV=local`. Không được chứa credential, query hay fragment |
 | `HQ_HTTP_ADDR` | Không | Địa chỉ lắng nghe, mặc định `:8094` (`make run-github-mcp` lấy từ `HQ_GITHUB_MCP_HTTP_ADDR`) |
 | `HQ_ENV` | Có | `local`, `staging` hoặc `production` |
@@ -45,7 +45,7 @@ Chạy cục bộ (`make run-github-mcp`, hoặc chạy thẳng binary) và đă
 ```
 HQ_ENV=local HQ_HTTP_ADDR=:8094 HQ_GITHUB_REPOSITORIES=acme/api,acme/web \
   HQ_GITHUB_TOKEN_FILE=/run/secrets/github-token HQ_GITHUB_ORG_ID=<id org> \
-  HQ_SERVICE_SIGNING_KEY=<khoá> ./bin/integration-github
+  HQ_SERVICE_VERIFY_KEY=<khoá công khai> ./bin/integration-github
 hqadmin mcp-server register -slug github -name "GitHub" -endpoint http://localhost:8094/mcp -org <slug org>
 hqadmin mcp-server discover -slug github -org <slug org>
 hqadmin mcp-tool classify -server github -tool list_pull_requests -risk read -enabled=true -org <slug org>
@@ -118,7 +118,7 @@ Lý do: mọi tool chỉ `GET`, không đổi trạng thái trên GitHub (`read`
 | Process không khởi động: `HQ_GITHUB_REPOSITORIES is required` / `HQ_GITHUB_TOKEN_FILE is required` / `HQ_GITHUB_ORG_ID is required` | Thiếu cấu hình | Đặt biến ở mục 2 |
 | Process không khởi động: `mục allowlist phải có dạng owner/repo, không wildcard` | Allowlist có mục sai dạng (`acme/*`, thiếu owner, có khoảng trắng bên trong) | Liệt kê từng repository |
 | Process không khởi động: `địa chỉ API phải dùng https` | `HQ_GITHUB_API_URL` là `http` ngoài `local` | Dùng `https` |
-| Gateway nhận 401 từ server | Khoá ký khác nhau giữa Gateway và server, đồng hồ lệch quá 30 giây, hoặc slug đăng ký không phải `github` | Đối chiếu `HQ_SERVICE_SIGNING_KEY`, NTP, slug |
+| Gateway nhận 401 từ server | Khoá công khai không ứng với khoá ký của Gateway, đồng hồ lệch quá 30 giây, header bị dùng lại hoặc body bị sửa sau khi ký, hoặc slug đăng ký không phải `github` | Đối chiếu `hqadmin service-key public` với `HQ_SERVICE_VERIFY_KEY`, NTP, slug |
 | Gateway nhận 403 từ server | Tool call thay mặt org khác `HQ_GITHUB_ORG_ID` | Đăng ký server ở đúng org; không đăng ký ở phạm vi platform |
 | Tool lỗi `repository không nằm trong allowlist của server` | Agent hỏi repository chưa được cấu hình | Thêm vào `HQ_GITHUB_REPOSITORIES` (và vào phạm vi token) rồi khởi động lại, nếu đúng là cần |
 | Tool lỗi JSON `{"error":"github_rate_limited",…}` | GitHub trả 403 / 429 do rate limit. `kind: primary` kèm `reset_at` (hết hạn mức theo giờ); `kind: secondary` kèm `retry_after_seconds` nếu GitHub nêu | Server **không tự thử lại** và từ chối cục bộ mọi lời gọi cho tới hết `retry_after_seconds` (xem "Giới hạn tần suất"). Chờ; giảm tần suất gọi; tách token nếu nhiều Agent dùng chung |

@@ -1,6 +1,6 @@
 // Command integration-loki: managed MCP server chỉ đọc cho Grafana Loki.
 //
-// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (HQ_SERVICE_SIGNING_KEY); không
+// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (kiểm bằng khoá công khai HQ_SERVICE_VERIFY_KEY); không
 // nhận token của người dùng. Địa chỉ Loki (HQ_LOKI_URL), bearer token
 // (HQ_LOKI_BEARER_TOKEN_FILE, tuỳ chọn) và tenant của Loki (HQ_LOKI_TENANT_ID, tuỳ
 // chọn, gửi trong header X-Scope-OrgID) do người vận hành managed server đặt: đây
@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hqgroups/mcp/internal/integration/loki"
+	"github.com/hqgroups/mcp/internal/integration/serve"
 	"github.com/hqgroups/mcp/internal/platform/config"
 	"github.com/hqgroups/mcp/internal/platform/process"
 	"github.com/hqgroups/mcp/internal/shared/signedctx"
@@ -64,9 +65,9 @@ func readToken(path string) (string, error) {
 
 // settings là cấu hình của process sau khi đọc và kiểm.
 type settings struct {
-	client *loki.Client
-	signer *signedctx.Signer
-	orgID  uuid.UUID
+	client   *loki.Client
+	verifier *signedctx.Verifier
+	orgID    uuid.UUID
 }
 
 // load đọc cấu hình từ môi trường. Mọi thiếu sót là lỗi khởi động; thông báo lỗi không
@@ -108,11 +109,7 @@ func load(getenv func(string) string) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	key, err := signedctx.ParseKey(getenv("HQ_SERVICE_SIGNING_KEY"))
-	if err != nil {
-		return settings{}, errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
-	}
-	signer, err := signedctx.NewSigner(key)
+	verifier, err := serve.VerifierFromEnv(getenv)
 	if err != nil {
 		return settings{}, err
 	}
@@ -121,7 +118,7 @@ func load(getenv func(string) string) (settings, error) {
 	if err != nil || orgID == uuid.Nil {
 		return settings{}, errors.New("HQ_LOKI_ORG_ID is required (id của organization sở hữu Loki này)")
 	}
-	return settings{client: client, signer: signer, orgID: orgID}, nil
+	return settings{client: client, verifier: verifier, orgID: orgID}, nil
 }
 
 func routes(ctx context.Context, mux *http.ServeMux, _ process.Deps) error {
@@ -131,6 +128,6 @@ func routes(ctx context.Context, mux *http.ServeMux, _ process.Deps) error {
 	}
 	// Số tenant của Loki mà process này đọc; không ghi giá trị.
 	slog.InfoContext(ctx, "loki: cấu hình tenant", "loki_tenants", s.client.Tenants())
-	mux.Handle("/mcp", loki.Handler(s.client, s.signer, s.orgID))
+	mux.Handle("/mcp", loki.Handler(s.client, s.verifier, s.orgID))
 	return nil
 }

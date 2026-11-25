@@ -57,7 +57,7 @@ Không có tool đọc Secret hay ConfigMap; không exec, attach, port-forward, 
 | `HQ_KUBERNETES_BEARER_TOKEN_FILE` | Có với `https` | Đường dẫn file chứa token của service account. Với `http` thì phải bỏ trống (token không bao giờ đi qua kết nối không mã hoá) |
 | `HQ_KUBERNETES_CA_FILE` | Không | CA (PEM) để xác minh chứng chỉ của apiserver. Bỏ trống thì dùng CA của hệ thống. Không có lựa chọn bỏ qua xác minh TLS |
 | `HQ_KUBERNETES_NAMESPACES` | **Có** | Phạm vi namespace. Hoặc một allowlist phân tách bằng dấu phẩy (tối đa 32 tên): mọi tool bị giới hạn trong đó, `list_namespaces` trả đúng danh sách này, `list_nodes` và event của Node bị từ chối. Hoặc đúng một ký tự `*`: mọi namespace mà service account đọc được. Không đặt, để trống, giá trị hỏng, hoặc `*` trộn với tên khác làm process không khởi động: thiếu cấu hình không bao giờ thành "mọi namespace" |
-| `HQ_SERVICE_SIGNING_KEY` | Có | Khoá ký ngữ cảnh dùng chung với Gateway (hex, ≥ 32 byte) |
+| `HQ_SERVICE_VERIFY_KEY` | Có | Khoá CÔNG KHAI kiểm ngữ cảnh của Gateway (Ed25519, hex 64 ký tự; `hqadmin service-key public`). Server từ chối khởi động nếu được cấp `HQ_SERVICE_SIGNING_KEY` (ADR-0018) |
 | `HQ_HTTP_ADDR` | Không | Địa chỉ lắng nghe, mặc định `:8093` (`make run-kubernetes-mcp` lấy từ `HQ_KUBERNETES_MCP_HTTP_ADDR`) |
 | `HQ_ENV` | Có | `local`, `staging` hoặc `production` |
 
@@ -138,7 +138,7 @@ Lý do: mọi tool chỉ `GET`, không đổi trạng thái cluster (`read` / `n
 | Process không khởi động: `HQ_KUBERNETES_NAMESPACES: … phạm vi namespace là bắt buộc` | Biến không đặt hoặc trống | Đặt allowlist, hoặc `*` nếu thật sự muốn mọi namespace |
 | Process không khởi động: `HQ_KUBERNETES_NAMESPACES: … tên không hợp lệ` | Allowlist có tên rỗng, viết hoa, ký tự lạ, hoặc `*` trộn với tên khác | Sửa danh sách |
 | Process không khởi động: `HQ_KUBERNETES_BEARER_TOKEN_FILE: file rỗng, quá lớn hoặc không đọc được` | File token rỗng, toàn khoảng trắng, hoặc trên 16 KiB | Ghi lại token vào file |
-| Gateway nhận 401 từ server | Khoá ký khác nhau giữa Gateway và server, đồng hồ lệch quá 30 giây, hoặc slug đăng ký không phải `kubernetes` | Đối chiếu `HQ_SERVICE_SIGNING_KEY`, NTP, slug |
+| Gateway nhận 401 từ server | Khoá công khai không ứng với khoá ký của Gateway, đồng hồ lệch quá 30 giây, header bị dùng lại hoặc body bị sửa sau khi ký, hoặc slug đăng ký không phải `kubernetes` | Đối chiếu `hqadmin service-key public` với `HQ_SERVICE_VERIFY_KEY`, NTP, slug |
 | Gateway nhận 403 từ server | Tool call thay mặt org khác `HQ_KUBERNETES_ORG_ID` | Đăng ký server ở đúng org; không đăng ký ở phạm vi platform |
 | Tool lỗi `không gọi được Kubernetes API` | Apiserver không tới được, chứng chỉ không khớp CA, hoặc quá 25 giây | Xem log của process (`kubernetes api: request lỗi`); log không chứa token |
 | Tool lỗi `kubernetes từ chối credential của server` | Apiserver trả 401: token sai hoặc đã hết hạn | Cấp token mới, khởi động lại process |

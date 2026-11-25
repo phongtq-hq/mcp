@@ -223,27 +223,26 @@ func fakeLoki(rec *recorder) http.Handler {
 }
 
 var (
-	testKey = []byte(strings.Repeat("k", 32))
-	testOrg = uuid.New()
+	testSigner = contract.TestSigner()
+	testOrg    = uuid.New()
 )
 
+// headerTransport ký mỗi request như Gateway trên tuyến execution (contract.ExecutionTransport).
 type headerTransport struct{ signer *signedctx.Signer }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.Header.Set(signedctx.Header, h.signer.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: loki.Slug,
-		OrgID: testOrg, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}, time.Now()))
 	// Header tenant của Loki trên request MCP không có nghĩa gì với server.
 	r.Header.Set("X-Scope-OrgID", "from-mcp-request")
-	return http.DefaultTransport.RoundTrip(r)
+	return contract.ExecutionTransport(h.signer, loki.Slug, testOrg, nil).RoundTrip(r)
 }
 
 // connect dựng server MCP trên client đã cho và nối một MCP client thật vào, với ngữ
 // cảnh ký của org sở hữu.
 func connect(t *testing.T, client *loki.Client) *mcp.ClientSession {
 	t.Helper()
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(loki.Handler(client, signer, testOrg))
+	signer := testSigner
+	srv := httptest.NewServer(loki.Handler(client, signer.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -347,11 +346,11 @@ func logArgs(query string, extra map[string]any) map[string]any {
 // Bộ test hợp đồng dùng chung của managed MCP server (mcp-platform §7).
 func TestContract(t *testing.T) {
 	client, rec := newFake(t, loki.Options{TenantID: "team-a"})
-	signer, _ := signedctx.NewSigner(testKey)
+	signer := testSigner
 	contract.Run(t, contract.Server{
 		Slug:           loki.Slug,
-		Handler:        loki.Handler(client, signer, testOrg),
-		SigningKey:     testKey,
+		Handler:        loki.Handler(client, signer.Verifier(), testOrg),
+		Signer:         signer,
 		OrgID:          testOrg,
 		TargetRequests: rec.count,
 		Tools: []contract.Tool{
@@ -363,9 +362,9 @@ func TestContract(t *testing.T) {
 				{"query": `sum by (level) (count_over_time({app="api"}[5m]))`, "start": rangeStart, "end": rangeEnd, "step_seconds": 60},
 				{"query": `rate({app="api"}[1m])`, "start": rangeStart, "end": rangeEnd, "step_seconds": 10, "limit": 50},
 				{"query": "wide", "start": rangeStart, "end": rangeEnd, "step_seconds": 60, "limit": 50}}},
-			{Name: "list_labels", MaxResultBytes: loki.MaxResultBytes, Samples: []map[string]any{
+			{Name: "list_labels", Direct: true, MaxResultBytes: loki.MaxResultBytes, Samples: []map[string]any{
 				{}, {"limit": 500, "lookback_hours": 24}}},
-			{Name: "list_label_values", MaxResultBytes: loki.MaxResultBytes, Samples: []map[string]any{
+			{Name: "list_label_values", Direct: true, MaxResultBytes: loki.MaxResultBytes, Samples: []map[string]any{
 				{"label": "app"}, {"label": "app", "limit": 500, "offset": 1000}, {"label": "huge"}}},
 		},
 	})

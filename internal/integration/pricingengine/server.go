@@ -206,17 +206,15 @@ func NewServer(client *Client) *mcp.Server {
 	return s
 }
 
-// ExecutionOnlyTools là các tool chỉ chạy trong một execution của Agent: hai tool trả giá
-// mua vào. Client bên ngoài gọi thẳng qua Gateway (token OIDC, API key) bị từ chối, nên mọi
-// lần đọc giá vốn đều thuộc một Agent Version đã liệt kê tool đó, có budget và có
-// execution_steps. Bốn tool danh mục (không có giá) gọi trực tiếp được.
-var ExecutionOnlyTools = []string{"get_price_book", "get_price_books"}
+// DirectTools là các tool client bên ngoài gọi trực tiếp được qua Gateway (serve.Direct);
+// tool khác chỉ chạy trong một execution của Agent. Hai tool giá mua vào (get_price_book, get_price_books) chỉ chạy trong execution: mọi lần đọc giá vốn thuộc một Agent Version đã liệt kê tool đó, có budget và có execution_steps.
+var DirectTools = []string{"list_products", "list_skus", "get_sku", "list_brands"}
 
 // Handler trả về HTTP handler của server: chỉ nhận request mang ngữ cảnh do Gateway ký cho
 // đúng server này; một PE thuộc về đúng một organization (orgID); ngữ cảnh discovery chỉ
-// đọc được danh sách tool; ExecutionOnlyTools chỉ chạy khi ngữ cảnh đã ký mang ExecutionID.
-// Xem internal/integration/serve.
-func Handler(client *Client, signer *signedctx.Signer, orgID uuid.UUID) http.Handler {
-	return serve.Handler(Slug, signer, orgID, func() *mcp.Server { return NewServer(client) },
-		serve.ExecutionOnly(ExecutionOnlyTools...))
+// đọc được danh sách tool; tool ngoài DirectTools chỉ chạy khi ngữ cảnh đã ký mang
+// ExecutionID. Xem internal/integration/serve.
+func Handler(client *Client, verifier *signedctx.Verifier, orgID uuid.UUID) http.Handler {
+	return serve.Handler(Slug, verifier, orgID, func() *mcp.Server { return NewServer(client) },
+		serve.Direct(DirectTools...))
 }

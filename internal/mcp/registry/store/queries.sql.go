@@ -57,6 +57,8 @@ UPDATE mcp_tools SET
   side_effect      = COALESCE($3, side_effect),
   data_sensitivity = COALESCE($4, data_sensitivity),
   egress           = COALESCE($5, egress),
+  -- Người vận hành bật hay tắt tường minh: tool không còn là "bị khoá".
+  locked_at        = CASE WHEN $1::bool IS NULL THEN locked_at END,
   updated_at       = clock_timestamp()
 WHERE server_version_id = $6 AND name = $7
 `
@@ -88,9 +90,10 @@ func (q *Queries) ClassifyTool(ctx context.Context, arg ClassifyToolParams) (int
 }
 
 const disableToolsByID = `-- name: DisableToolsByID :exec
-UPDATE mcp_tools SET enabled = false, updated_at = clock_timestamp() WHERE id = ANY($1::uuid[])
+UPDATE mcp_tools SET enabled = false, locked_at = clock_timestamp(), updated_at = clock_timestamp() WHERE id = ANY($1::uuid[])
 `
 
+// Tạm khoá (định nghĩa đổi): khác với người vận hành tắt tool, xem migration 00039.
 func (q *Queries) DisableToolsByID(ctx context.Context, ids []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, disableToolsByID, ids)
 	return err
@@ -375,7 +378,12 @@ WHERE (s.org_id = $1 OR s.org_id IS NULL) AND s.status = 'active'
   AND ($3::bool IS NULL OR t.enabled = $3)
   AND ($4::text IS NULL OR t.risk_level = $4)
   AND ($5::uuid IS NULL OR t.id = $5)
-ORDER BY s.slug, (s.org_id IS NOT NULL), t.name LIMIT $6
+  -- Chính sách project (migration 00041): server giới hạn theo project chỉ có mặt ở project
+  -- đã được gắn. project_id NULL: không lọc (danh sách quản trị cấp org).
+  AND ($6::uuid IS NULL OR NOT s.project_scoped OR EXISTS (
+        SELECT 1 FROM mcp_server_projects b
+        WHERE b.org_id = s.org_id AND b.server_id = s.id AND b.project_id = $6))
+ORDER BY s.slug, (s.org_id IS NOT NULL), t.name LIMIT $7
 `
 
 type ListActiveToolsParams struct {
@@ -384,6 +392,7 @@ type ListActiveToolsParams struct {
 	Enabled   *bool
 	RiskLevel *string
 	ToolID    *uuid.UUID
+	ProjectID *uuid.UUID
 	RowLimit  int32
 }
 
@@ -417,6 +426,7 @@ func (q *Queries) ListActiveTools(ctx context.Context, arg ListActiveToolsParams
 		arg.Enabled,
 		arg.RiskLevel,
 		arg.ToolID,
+		arg.ProjectID,
 		arg.RowLimit,
 	)
 	if err != nil {
@@ -541,7 +551,7 @@ func (q *Queries) ListServers(ctx context.Context, arg ListServersParams) ([]Lis
 }
 
 const listToolsOfVersion = `-- name: ListToolsOfVersion :many
-SELECT id, name, definition_hash, enabled, risk_level, side_effect, data_sensitivity, egress, cacheable, timeout_ms, max_result_bytes
+SELECT id, name, definition_hash, enabled, risk_level, side_effect, data_sensitivity, egress, cacheable, timeout_ms, max_result_bytes, locked_at
 FROM mcp_tools WHERE server_version_id = $1
 `
 
@@ -557,6 +567,7 @@ type ListToolsOfVersionRow struct {
 	Cacheable       bool
 	TimeoutMs       int32
 	MaxResultBytes  int32
+	LockedAt        *time.Time
 }
 
 func (q *Queries) ListToolsOfVersion(ctx context.Context, serverVersionID uuid.UUID) ([]ListToolsOfVersionRow, error) {
@@ -580,6 +591,7 @@ func (q *Queries) ListToolsOfVersion(ctx context.Context, serverVersionID uuid.U
 			&i.Cacheable,
 			&i.TimeoutMs,
 			&i.MaxResultBytes,
+			&i.LockedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -768,6 +780,39 @@ func (q *Queries) SlugUsedInOtherScope(ctx context.Context, arg SlugUsedInOtherS
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const tightenChangedPolicy = `-- name: TightenChangedPolicy :exec
+UPDATE mcp_tools n SET
+  enabled = n.enabled AND (o.enabled OR o.locked_at IS NOT NULL),
+  risk_level = CASE WHEN array_position(ARRAY['read','write','destructive','financial'], o.risk_level)
+                       > array_position(ARRAY['read','write','destructive','financial'], n.risk_level)
+                    THEN o.risk_level ELSE n.risk_level END,
+  data_sensitivity = CASE WHEN array_position(ARRAY['public','internal','sensitive'], o.data_sensitivity)
+                             > array_position(ARRAY['public','internal','sensitive'], n.data_sensitivity)
+                          THEN o.data_sensitivity ELSE n.data_sensitivity END,
+  egress = n.egress OR o.egress,
+  cacheable = n.cacheable AND o.cacheable,
+  timeout_ms = LEAST(n.timeout_ms, o.timeout_ms),
+  max_result_bytes = LEAST(n.max_result_bytes, o.max_result_bytes),
+  updated_at = clock_timestamp()
+FROM mcp_tools o
+WHERE n.server_version_id = $1 AND o.server_version_id = $2
+  AND o.name = n.name AND o.definition_hash <> n.definition_hash
+`
+
+type TightenChangedPolicyParams struct {
+	NewVersionID    uuid.UUID
+	ActiveVersionID uuid.UUID
+}
+
+// Cùng thời điểm: tool có định nghĩa ĐÃ ĐỔI chỉ được giữ hoặc siết theo phân loại HIỆN TẠI
+// của version đang hoạt động (người vận hành có thể đã tắt tool hay gắn nhãn sensitive
+// trong lúc version mới chờ duyệt; bản chép lúc discovery không thấy thay đổi đó). Tool đang
+// tắt chỉ vì bị khoá (locked_at) không tính là bị tắt.
+func (q *Queries) TightenChangedPolicy(ctx context.Context, arg TightenChangedPolicyParams) error {
+	_, err := q.db.Exec(ctx, tightenChangedPolicy, arg.NewVersionID, arg.ActiveVersionID)
+	return err
 }
 
 const updateServerMeta = `-- name: UpdateServerMeta :execrows

@@ -15,7 +15,6 @@ import (
 	"github.com/hqgroups/mcp/internal/ai/provider"
 	"github.com/hqgroups/mcp/internal/mcp/registry"
 	"github.com/hqgroups/mcp/internal/shared/exectoken"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // TestApprovals: tool ghi và approval (security §4.3, §4.4). Tool ghi chạy tự do trên
@@ -26,7 +25,7 @@ func TestApprovals(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	adminA, adminB, viewerA, devA, otherAdminA := e.tok("admin-a"), e.tok("admin-b"), e.tok("viewer-a"), e.tok("dev-a"), e.tok("multi-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

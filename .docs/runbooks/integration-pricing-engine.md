@@ -19,7 +19,7 @@ Hình dạng API được đọc từ mã nguồn và tài liệu của PE (`app
 | `get_sku` | `GET /api/v1/skus/{id}` | Một SKU theo UUID | — |
 | `list_brands` | `GET /api/v1/brands` | Thương hiệu (game) | `limit` 1–100 (mặc định 50); lọc `status` |
 
-**Hai tool giá chỉ chạy trong một execution của Agent.** `get_price_book` và `get_price_books` từ chối tool call không thuộc execution nào (client bên ngoài gọi thẳng qua Gateway bằng token OIDC hay API key) với lỗi "tool này chỉ chạy trong một execution của Agent", trước khi có request nào tới PE. Server nhận biết bằng `ExecutionID` trong ngữ cảnh do Gateway ký (`serve.ExecutionOnly`); Gateway chỉ ký nó cho tool call của Agent Runtime, sau khi đã kiểm task, Agent Version và người khởi tạo. Hệ quả: mỗi lần đọc giá vốn đều thuộc một Agent Version đã liệt kê tool đó, có budget và có `execution_steps`. Bốn tool danh mục (không có giá) gọi trực tiếp được.
+**Hai tool giá chỉ chạy trong một execution của Agent.** `get_price_book` và `get_price_books` từ chối tool call không thuộc execution nào (client bên ngoài gọi thẳng qua Gateway bằng token OIDC hay API key) với lỗi "tool này chỉ chạy trong một execution của Agent", trước khi có request nào tới PE. Server nhận biết bằng `ExecutionID` trong ngữ cảnh do Gateway ký (hai tool này không nằm trong `DirectTools`, ADR-0018); Gateway chỉ ký nó cho tool call của Agent Runtime, sau khi đã kiểm task, Agent Version và người khởi tạo. Hệ quả: mỗi lần đọc giá vốn đều thuộc một Agent Version đã liệt kê tool đó, có budget và có `execution_steps`. Bốn tool danh mục (không có giá) gọi trực tiếp được.
 
 Mọi kết quả đã tuần tự hoá không quá 64 KiB (bằng `max_result_bytes` mặc định của Registry). Phân trang bằng `cursor` / `next_cursor`; con trỏ là con trỏ mờ của PE, chuyển nguyên vẹn. Khi một trang của PE không vừa trần, server đọc lại PE với số dòng ít hơn (tối đa 7 lần) thay vì cắt bớt dòng, vì con trỏ của PE chỉ đúng ở cuối một trang của chính PE. Timeout HTTP của một request tới PE là 15 giây; **hạn tổng của một tool call là 25 giây**, tính cả các lần đọc lại trang nhỏ hơn và thời gian chờ suất đồng thời (quá hạn: lỗi `did not answer within the time allowed`). Context bị huỷ (Gateway bỏ kết nối, execution bị huỷ) thì server dừng gọi PE. Thân phản hồi của PE đọc tối đa 8 MiB.
 
@@ -48,7 +48,7 @@ Văn bản lỗi của PE không bao giờ được chuyển cho Agent; lỗi đ
 | `HQ_PRICING_ENGINE_API_KEY_FILE` | Có (trừ khi dùng biến bên dưới ở `local`) | Đường dẫn file chứa đúng một API key của PE trên một dòng. Khoá không đọc từ biến môi trường. Ngoài `local`, file cho nhóm hoặc người khác đọc (`mode & 077 ≠ 0`) làm process từ chối khởi động: đặt `0600` hoặc `0400` |
 | `HQ_PRICING_ENGINE_API_KEY` | Không | **Chỉ ở `HQ_ENV=local`:** khoá đặt thẳng trong biến môi trường, thay cho file, để chạy thử trên máy phát triển. Ngoài `local` biến này làm process từ chối khởi động; đặt cùng lúc với `_FILE` cũng bị từ chối. Khoá trong `.env` dễ lọt hơn file quyền `0600`: đừng commit `.env`, và thu hồi khoá khi thử xong |
 | `HQ_PRICING_ENGINE_ORG_ID` | Có | Id của organization sở hữu PE này. Tool call thay mặt org khác bị từ chối |
-| `HQ_SERVICE_SIGNING_KEY` | Có | Khoá ký ngữ cảnh dùng chung với Gateway (hex, ≥ 32 byte) |
+| `HQ_SERVICE_VERIFY_KEY` | Có | Khoá CÔNG KHAI kiểm ngữ cảnh của Gateway (Ed25519, hex 64 ký tự; `hqadmin service-key public`). Server từ chối khởi động nếu được cấp `HQ_SERVICE_SIGNING_KEY` (ADR-0018) |
 | `HQ_ENV` | Có, tường minh | `local`, `staging` hoặc `production`. Process từ chối khởi động nếu thiếu: mặc định `local` sẽ lặng lẽ nới hai kiểm tra (http tới loopback, quyền của file khoá) |
 | `HQ_HTTP_ADDR` | Không | Địa chỉ lắng nghe, mặc định `:8095` (`make run-pricing-engine-mcp` lấy từ `HQ_PRICING_ENGINE_MCP_HTTP_ADDR`) |
 
@@ -104,7 +104,7 @@ Người quản trị PE làm (giao diện admin của PE):
 - **Trần của Gateway không thay được hạn mức trên:** Gateway giới hạn 120 request / phút theo từng principal, và **mỗi API key của platform là một principal riêng** với 120 / phút của riêng nó; nhiều key hoặc nhiều người dùng cộng lại vượt xa một con số duy nhất. Trần theo PE là hạn mức của server (ở trên) và rate limit của key PE.
 - **Ngắt mạch sau 429.** Khi PE trả `429`, server đóng ngắt mạch: trong thời gian PE nêu ở `Retry-After` (hoặc `X-RateLimit-Reset`; không nêu thì 10 giây; luôn trong khoảng 1–120 giây) nó không gửi request nào và trả lỗi `pricing_engine_rate_limited` kèm `retry_after_seconds`. Nó không tự thử lại và không ngủ chờ. Ngắt mạch nằm trong bộ nhớ của process: khởi động lại là mất.
 - **Scope là toàn bộ quyền ở PE:** key có `api_pricing:read` đọc được giá của MỌI SKU và mọi nhà cung cấp. Integration không lọc theo SKU, thương hiệu hay nhà cung cấp. Nếu có phần dữ liệu không nên tới Agent, chặn ở phía PE.
-- **Agent nào gọi được tool giá thì thấy giá vốn, và đưa nó đi đâu là việc của Agent Version.** Gateway hiện chưa thực thi `data_sensitivity` (roadmap Phase 4: "kiểm soát luồng dữ liệu" chưa có), và `hqadmin` chưa đặt được nhãn đó cho managed server; nhãn `sensitive` ở mục 5 là để admin biết, không tự chặn gì. Kiểm soát thật hiện có: hai tool giá chỉ chạy trong execution; Agent Version nào tham chiếu `pricing-engine.get_price_book(s)`; ai chạy được Agent đó và đọc được nội dung step (`execution:read_content`); model provider nào nhận nội dung (kết quả tool đi vào prompt gửi tới provider LLM).
+- **Agent nào gọi được tool giá thì thấy giá vốn, và đưa nó đi đâu là việc của Agent Version.** Gateway thực thi nhãn `sensitive` ở mục 5 (ẩn với client bên ngoài; tool `egress` sau khi đọc giá vốn cần duyệt), nhưng tool không `egress` (ví dụ tool ghi nội bộ) và câu trả lời của Agent vẫn mang được giá vốn đi. Kiểm soát hiện có: hai tool giá chỉ chạy trong execution; chính sách project (`hqadmin mcp-server scope`); output của execution cần `execution:read_content`; Agent Version nào tham chiếu `pricing-engine.get_price_book(s)`; ai chạy được Agent đó và đọc được nội dung step (`execution:read_content`); model provider nào nhận nội dung (kết quả tool đi vào prompt gửi tới provider LLM).
 - **Quy ước cho tới khi Gateway thực thi `data_sensitivity`:** một Agent Version tham chiếu tool giá **không được kèm tool ghi hay tool `egress`** (tool gửi dữ liệu ra ngoài hạ tầng của org: chat, email, webhook, issue tracker bên ngoài…), và không được nằm trong `can_delegate_to` của / giao việc cho Agent có các tool đó khi kết quả của nó mang giá. Lý do: tên nhà cung cấp và tên SKU là văn bản không tin cậy đi vào context cùng với giá vốn; một Agent vừa đọc được giá vừa ghi / gửi ra ngoài được là đường rò rỉ qua prompt injection. Quy ước này do người duyệt Agent Version giữ; platform chưa kiểm.
 - **Đường nối Gateway → integration phải là TLS hoặc mạng riêng.** Header ngữ cảnh do Gateway ký sống 2 phút và chưa gắn với body: ai nghe được một header loại `call` thì gọi được tool bất kỳ của server này thay mặt org đó trong thời gian ấy. Ví dụ `http://localhost:8095` chỉ dành cho máy phát triển.
 - **Đường nối integration → PE luôn là `https`.** `http` chỉ được nhận khi `HQ_ENV=local` và host là loopback; `http` tới bất kỳ host nào khác bị từ chối ở mọi môi trường, kể cả `local`.
@@ -126,7 +126,15 @@ Người quản trị PE làm (giao diện admin của PE):
 
 Lý do: mọi tool chỉ đọc PE (`read` / `none`); `get_price_books` dùng `POST` nhưng PE không tạo hay đổi gì và không ghi audit từng lượt đọc. Hai tool giá trả giá mua vào theo từng nhà cung cấp, là bí mật thương mại của HQ (`sensitive`); bốn tool danh mục không có giá (`internal`). Không tool nào gửi dữ liệu ra ngoài hạ tầng của org (`egress = false`). Không cache: giá và tồn kho đổi theo từng lượt sync của nhà cung cấp, và một khuyến nghị dựa trên giá cũ là khuyến nghị sai (với danh mục có thể nới thành cache ngắn sau, khi có số đo). Timeout 30 giây lớn hơn **hạn tổng 25 giây** mà server tự đặt cho một tool call (gồm mọi lần đọc lại trang nhỏ hơn của `list_*` và thời gian chờ suất đồng thời; mỗi request tới PE tối đa 15 giây), nên server trả lỗi rõ ràng trước khi Gateway bỏ kết nối. Đừng đặt `timeout` của tool dưới 25 giây.
 
-`hqadmin mcp-tool classify` hiện chỉ đặt được `-risk` và `-enabled`; **chưa có cách đặt `data_sensitivity = sensitive` cho tool của managed server** (CLI thiếu cờ, API từ chối managed server). Cho tới khi có, hai tool giá mang `internal` trong Registry dù đề xuất là `sensitive`, và quy ước ở mục 4 (Agent Version có tool giá không kèm tool ghi / egress) là thứ thay thế.
+**Bắt buộc sau khi đăng ký:** gắn nhãn `sensitive` cho hai tool giá, và giới hạn server vào đúng project được dùng giá vốn:
+
+```sh
+hqadmin mcp-tool classify -server pricing-engine -tool get_price_book  -sensitivity sensitive -org <slug org>
+hqadmin mcp-tool classify -server pricing-engine -tool get_price_books -sensitivity sensitive -org <slug org>
+hqadmin mcp-server scope  -slug pricing-engine -org <slug org> -scoped=true -add <slug project>
+```
+
+Từ đó Gateway: không cho client bên ngoài thấy hay gọi hai tool này; ghi lại execution nào đã đọc giá vốn, và bắt người duyệt khi execution đó gọi tool `egress` hay tool của MCP server ngoài; chỉ project đã gắn thấy server. Đổi định nghĩa tool (bản integration mới) không làm rơi nhãn (migration 00039).
 
 ## 6. Lỗi thường gặp
 
@@ -139,7 +147,7 @@ Lý do: mọi tool chỉ đọc PE (`read` / `none`); `get_price_books` dùng `P
 | Tool lỗi `server_rate_limited` | Hạn mức 300 request / phút của chính server đã hết | Chờ `retry_after_seconds`; tìm Agent đang lặp. Không nâng được bằng cấu hình |
 | Tool lỗi `did not answer within the time allowed` | Quá hạn tổng 25 giây của một tool call (PE chậm, chờ suất đồng thời, hoặc execution bị huỷ) | Thử lại; đặt `limit`, giảm số SKU của lô |
 | Process không khởi động: `HQ_PRICING_ENGINE_API_KEY_FILE: …` | Thiếu biến, file không đọc được, rỗng, quá 4 KiB, hoặc có khoảng trắng / nhiều dòng | File chứa đúng một khoá trên một dòng, process đọc được |
-| Gateway nhận 401 từ server | Khoá ký khác nhau giữa Gateway và server, đồng hồ lệch quá 30 giây, hoặc slug đăng ký không phải `pricing-engine` | Đối chiếu `HQ_SERVICE_SIGNING_KEY`, NTP, slug |
+| Gateway nhận 401 từ server | Khoá công khai không ứng với khoá ký của Gateway, đồng hồ lệch quá 30 giây, header bị dùng lại hoặc body bị sửa sau khi ký, hoặc slug đăng ký không phải `pricing-engine` | Đối chiếu `hqadmin service-key public` với `HQ_SERVICE_VERIFY_KEY`, NTP, slug |
 | Gateway nhận 403 từ server | Tool call thay mặt org khác `HQ_PRICING_ENGINE_ORG_ID` | Đăng ký server ở đúng org; không đăng ký ở phạm vi platform |
 | Tool lỗi `SKU not found` | PE trả 404: SKU không tồn tại, đã ngừng (`inactive`), hoặc mã sai dấu (`HQ_A` khác `HQ-A`) | Lấy mã đúng từ `list_products` / `list_skus`; SKU `inactive` có trong danh mục nhưng không có bảng giá |
 | Tool lỗi `refused the credential of this server` | PE trả 401 / 403: khoá sai, hết hạn, bị thu hồi, thiếu scope, hoặc IP ngoài whitelist | Xem log (`pricing engine api: credential bị từ chối`, kèm đường dẫn và status). `/prices`, `/products` lỗi mà `/skus`, `/brands` chạy (hoặc ngược lại) là thiếu một trong hai scope |
@@ -158,9 +166,7 @@ Lý do: mọi tool chỉ đọc PE (`read` / `none`); `get_price_books` dùng `P
 - **Chưa gọi một PE thật.** Test đơn vị, test hợp đồng và test đầu-cuối qua Gateway (`go test ./tests/api -run TestPricingEngineEndToEnd`: client bên ngoài bị từ chối ở tool giá, một execution đọc được bảng giá) đều dùng PE giả lập có hình dạng JSON chép từ mã nguồn PE. Trước khi cho Agent dùng: chạy với PE staging và đối chiếu từng tool. Việc kiểm dạng chặt ở mục 1 là giả định về dữ liệu thật của PE (ví dụ mọi mã SKU, kể cả mã cũ, theo `SKU_PATTERN`; mọi mã tiền tệ là 2–10 chữ in hoa / số): PE staging là nơi đầu tiên kiểm được nó.
 - `ETag` / `If-None-Match` của PE chưa dùng (không cache).
 - Hạn mức của server (300 / phút, 8 đồng thời) là hằng trong code, chưa cấu hình được; nằm trong bộ nhớ của một process.
-- **Registry tự bật lại tool đã tắt khi định nghĩa đổi** (mục 2): chưa sửa; phải kiểm tay sau mỗi lần duyệt version.
 - Test đầu-cuối của đường execution dùng adapter model giả lập trong process; chưa chạy với Temporal `worker` thật cho integration này.
 - Nhiều PE mỗi org; lọc theo nhà cung cấp / thương hiệu ở phía integration.
-- Cờ đặt `data_sensitivity` trong `hqadmin mcp-tool classify`, và việc Gateway thực thi `data_sensitivity` / `egress`: chưa có; quy ước ở mục 4 là thứ thay thế.
 - Thống kê trên giá (chênh lệch, xu hướng): cố ý không có trong bản này.
 - Mọi thao tác ghi (`fulfillment-events`): không có và không dự kiến trong integration chỉ đọc này.

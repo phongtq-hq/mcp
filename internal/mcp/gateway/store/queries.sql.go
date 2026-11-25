@@ -79,3 +79,37 @@ func (q *Queries) GetToolClaim(ctx context.Context, arg GetToolClaimParams) (Get
 	err := row.Scan(&i.ToolID, &i.ArgsHash)
 	return i, err
 }
+
+const hasSensitiveRead = `-- name: HasSensitiveRead :one
+SELECT EXISTS (SELECT 1 FROM mcp_execution_sensitive_reads WHERE org_id = $1 AND execution_id = $2)
+`
+
+type HasSensitiveReadParams struct {
+	OrgID       uuid.UUID
+	ExecutionID uuid.UUID
+}
+
+func (q *Queries) HasSensitiveRead(ctx context.Context, arg HasSensitiveReadParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasSensitiveRead, arg.OrgID, arg.ExecutionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const markSensitiveRead = `-- name: MarkSensitiveRead :exec
+INSERT INTO mcp_execution_sensitive_reads (org_id, execution_id, first_tool_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (org_id, execution_id) DO NOTHING
+`
+
+type MarkSensitiveReadParams struct {
+	OrgID       uuid.UUID
+	ExecutionID uuid.UUID
+	ToolID      uuid.UUID
+}
+
+// Execution sắp đọc một tool sensitive (migration 00040). Ghi trước khi gọi upstream.
+func (q *Queries) MarkSensitiveRead(ctx context.Context, arg MarkSensitiveReadParams) error {
+	_, err := q.db.Exec(ctx, markSensitiveRead, arg.OrgID, arg.ExecutionID, arg.ToolID)
+	return err
+}

@@ -36,7 +36,7 @@ func TestLoad(t *testing.T) {
 	keyFile := writeFile(t, testAPIKey+"\n")
 	base := map[string]string{
 		"HQ_ENV": "local", "HQ_PRICING_ENGINE_URL": "http://localhost:3001", "HQ_PRICING_ENGINE_ORG_ID": testOrg,
-		"HQ_PRICING_ENGINE_API_KEY_FILE": keyFile, "HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32),
+		"HQ_PRICING_ENGINE_API_KEY_FILE": keyFile, "HQ_SERVICE_VERIFY_KEY": strings.Repeat("ab", 32),
 	}
 	with := func(over map[string]string) func(string) string {
 		env := map[string]string{}
@@ -99,8 +99,9 @@ func TestLoad(t *testing.T) {
 		"local: khoá trong biến có xuống dòng": {"HQ_PRICING_ENGINE_API_KEY_FILE": "", "HQ_PRICING_ENGINE_API_KEY": testAPIKey + "\n" + testAPIKey},
 		"thiếu org":                            {"HQ_PRICING_ENGINE_ORG_ID": ""},
 		"org rỗng (nil UUID)":                  {"HQ_PRICING_ENGINE_ORG_ID": "00000000-0000-0000-0000-000000000000"},
-		"thiếu khoá ký":                        {"HQ_SERVICE_SIGNING_KEY": ""},
-		"khoá ký quá ngắn":                     {"HQ_SERVICE_SIGNING_KEY": "abcd"},
+		"thiếu khoá kiểm":                      {"HQ_SERVICE_VERIFY_KEY": ""},
+		"được cấp khoá ký":                     {"HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32)},
+		"khoá kiểm quá ngắn":                   {"HQ_SERVICE_VERIFY_KEY": "abcd"},
 	} {
 		_, err := load(with(over))
 		if err == nil {

@@ -36,6 +36,30 @@ func TestMemoryLimiterClasses(t *testing.T) {
 	}
 }
 
+// Hạn mức chung của organization: nhiều principal của cùng org dùng chung, org khác không bị ảnh hưởng.
+func TestMemoryLimiterOrgBucket(t *testing.T) {
+	l := newMemoryLimiter()
+	ctx := context.Background()
+	orgA, orgB := uuid.New(), uuid.New()
+	class := classDiscovery + orgSuffix
+	for i := 0; i < perMinute[class]; i++ {
+		if ok, _, err := l.Allow(ctx, orgA, uuid.Nil, class); !ok || err != nil {
+			t.Fatalf("lần %d bị từ chối", i+1)
+		}
+	}
+	if ok, _, _ := l.Allow(ctx, orgA, uuid.Nil, class); ok {
+		t.Error("vượt hạn mức chung của org mà vẫn được phép")
+	}
+	if ok, _, _ := l.Allow(ctx, orgB, uuid.Nil, class); !ok {
+		t.Error("org khác bị hạn mức của org A chặn")
+	}
+	for _, c := range []string{classMCP, classModel, classDiscovery} {
+		if perMinute[c+orgSuffix] <= perMinute[c] {
+			t.Errorf("hạn mức org của %s phải lớn hơn hạn mức một principal", c)
+		}
+	}
+}
+
 // Token bucket trên Redis thật: hạn mức dùng chung giữa các "replica", tách theo org,
 // principal và lớp; không kiểm tra được thì báo lỗi (để Gateway từ chối).
 func TestRedisLimiter(t *testing.T) {

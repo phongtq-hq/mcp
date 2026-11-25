@@ -15,7 +15,6 @@ import (
 	"github.com/hqgroups/mcp/internal/adminops"
 	"github.com/hqgroups/mcp/internal/ai/provider"
 	"github.com/hqgroups/mcp/internal/mcp/registry"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // plannedFixture là hạ tầng của org A cho execution chế độ planned: một MCP server có
@@ -35,7 +34,7 @@ func newPlannedFixture(t *testing.T, e *env, slug string) *plannedFixture {
 	t.Helper()
 	ctx := context.Background()
 	adminA := e.tok("admin-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

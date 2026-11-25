@@ -338,8 +338,8 @@ func fakePE(rec *recorder) http.Handler {
 }
 
 var (
-	testKey = []byte(strings.Repeat("k", 32))
-	testOrg = uuid.New()
+	testSigner = contract.TestSigner()
+	testOrg    = uuid.New()
 )
 
 // headerTransport ký ngữ cảnh của org sở hữu cho mỗi request. execution: ngữ cảnh mang
@@ -350,21 +350,19 @@ type headerTransport struct {
 }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
 	c := signedctx.Context{Kind: signedctx.KindCall, Audience: pricingengine.Slug,
 		OrgID: testOrg, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}
 	if h.execution {
 		id := uuid.New()
 		c.ExecutionID = &id
 	}
-	r.Header.Set(signedctx.Header, h.signer.Sign(c, time.Now()))
-	return http.DefaultTransport.RoundTrip(r)
+	return (&signedctx.Transport{Signer: h.signer, Context: c}).RoundTrip(r)
 }
 
 func session(t *testing.T, client *pricingengine.Client, execution bool) *mcp.ClientSession {
 	t.Helper()
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(pricingengine.Handler(client, signer, testOrg))
+	signer := testSigner
+	srv := httptest.NewServer(pricingengine.Handler(client, signer.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -389,22 +387,6 @@ func connect(t *testing.T, client *pricingengine.Client) *mcp.ClientSession {
 func connectDirect(t *testing.T, client *pricingengine.Client) *mcp.ClientSession {
 	t.Helper()
 	return session(t, client, false)
-}
-
-// asExecution đứng trước handler THẬT của server và làm việc Gateway làm trên tuyến của
-// Agent Runtime: một ngữ cảnh call có chữ ký hợp lệ được ký lại kèm ExecutionID. Ngữ cảnh
-// không hợp lệ, ngữ cảnh discovery và org của ngữ cảnh được chuyển nguyên vẹn, nên mọi
-// phép kiểm của bộ test hợp đồng (chữ ký, discovery, org khác) vẫn do handler thật quyết.
-func asExecution(signer *signedctx.Signer, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if c, err := signer.Verify(r.Header.Get(signedctx.Header), pricingengine.Slug, time.Now()); err == nil && c.Kind == signedctx.KindCall {
-			id := uuid.New()
-			c.ExecutionID = &id
-			r = r.Clone(r.Context())
-			r.Header.Set(signedctx.Header, signer.Sign(c, time.Now()))
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // clock là đồng hồ giả của client (ngắt mạch).
@@ -479,16 +461,12 @@ func manySKUs(prefix string, n int) []any {
 // Bộ test hợp đồng dùng chung của managed MCP server (mcp-platform §7).
 func TestContract(t *testing.T) {
 	client, rec, _ := newFake(t)
-	signer, _ := signedctx.NewSigner(testKey)
+	signer := testSigner
 	maxBytes := pricingengine.MaxResultBytes
 	contract.Run(t, contract.Server{
-		Slug: pricingengine.Slug,
-		// Bộ test hợp đồng ký ngữ cảnh call không có ExecutionID (client bên ngoài), mà hai
-		// tool giá chỉ chạy trong execution: nó gọi server qua asExecution, tức đúng handler
-		// sản phẩm trên tuyến của Agent Runtime. Luật "ngoài execution thì từ chối" có test
-		// riêng (TestPriceToolsOnlyInExecution).
-		Handler:        asExecution(signer, pricingengine.Handler(client, signer, testOrg)),
-		SigningKey:     testKey,
+		Slug:           pricingengine.Slug,
+		Handler:        pricingengine.Handler(client, signer.Verifier(), testOrg),
+		Signer:         signer,
 		OrgID:          testOrg,
 		TargetRequests: rec.count,
 		Tools: []contract.Tool{
@@ -499,12 +477,12 @@ func TestContract(t *testing.T) {
 				{"skus": []any{"HQ-FREEFIRE-GC-20", "HQ-UNKNOWN"}},
 				{"skus": manySKUs("HQ-N", 50), "include_ineligible": true, "currency": "EUR"},
 				{"skus": manySKUs("HQ-BIG", 8)}}},
-			{Name: "list_products", MaxResultBytes: maxBytes, Samples: []map[string]any{
+			{Name: "list_products", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{
 				{}, {"page_size": 100, "updated_since": "2026-10-22T00:00:00Z"}, {"cursor": "c200", "page_size": 100}}},
-			{Name: "list_skus", MaxResultBytes: maxBytes, Samples: []map[string]any{
+			{Name: "list_skus", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{
 				{}, {"limit": 100, "status": "active", "brand_id": brandID, "region": "GLOBAL"}, {"sku_code": "HQ-SKU-000"}}},
-			{Name: "get_sku", MaxResultBytes: maxBytes, Samples: []map[string]any{{"id": skuID}}},
-			{Name: "list_brands", MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 100, "status": "inactive"}}},
+			{Name: "get_sku", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{"id": skuID}}},
+			{Name: "list_brands", Direct: true, MaxResultBytes: maxBytes, Samples: []map[string]any{{}, {"limit": 100, "status": "inactive"}}},
 		},
 	})
 }

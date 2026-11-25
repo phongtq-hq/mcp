@@ -54,7 +54,7 @@ func (g *Gateway) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 	ctx := tenancy.WithOrg(identity.WithPrincipal(r.Context(), p), claims.OrgID)
 	ctx = audit.WithActor(ctx, audit.Actor{Type: p.Type, ID: &p.ID})
 	// Hạn mức discovery tính theo org, không theo actor trong token.
-	if !g.limit(w, r, identity.Principal{Type: p.Type, OrgID: p.OrgID}, classDiscovery) {
+	if !g.limit(w, r, identity.Principal{Type: p.Type, OrgID: p.OrgID}, classDiscovery, true) {
 		return
 	}
 	srv, err := g.ext.Servers.ExternalEndpoint(ctx, serverID)

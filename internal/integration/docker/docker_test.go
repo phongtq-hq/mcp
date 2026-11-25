@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -70,46 +71,53 @@ func fakeDocker(t *testing.T) (*httptest.Server, *[]string) {
 	return srv, &seen
 }
 
+// headerTransport đặt header ngữ cảnh do value tính trên đúng body của request.
 type headerTransport struct {
-	value func() string
+	value func(body []byte) string
 	base  http.RoundTripper
 }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+	}
 	r = r.Clone(r.Context())
-	if v := h.value(); v != "" {
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if v := h.value(body); v != "" {
 		r.Header.Set(signedctx.Header, v)
 	}
 	return h.base.RoundTrip(r)
 }
 
-var testKey = []byte(strings.Repeat("k", 32))
+var testSigner = contract.TestSigner()
 
 var testOrg = uuid.New()
 
-func signed(aud string) func() string { return signedFor(aud, signedctx.KindCall, testOrg) }
+func signed(aud string) func([]byte) string { return signedFor(aud, signedctx.KindCall, testOrg) }
 
-func signedFor(aud, kind string, org uuid.UUID) func() string {
-	s, _ := signedctx.NewSigner(testKey)
-	return func() string {
+// signedFor ký như Gateway: tool call nằm trong một execution (tuyến của Agent Runtime).
+func signedFor(aud, kind string, org uuid.UUID) func([]byte) string {
+	return func(body []byte) string {
 		c := signedctx.Context{Kind: kind, Audience: aud}
 		if kind == signedctx.KindCall {
-			c.OrgID, c.ProjectID, c.Initiator = org, uuid.New(), "user:"+uuid.NewString()
+			exec := uuid.New()
+			c.OrgID, c.ProjectID, c.Initiator, c.ExecutionID = org, uuid.New(), "user:"+uuid.NewString(), &exec
 		}
-		return s.Sign(c, time.Now())
+		return testSigner.SignBody(c, body, time.Now())
 	}
 }
 
 // connect dựng server MCP Docker trên một Docker API giả và nối một MCP client thật vào.
-func connect(t *testing.T, header func() string) (*mcp.ClientSession, *[]string, string) {
+func connect(t *testing.T, header func([]byte) string) (*mcp.ClientSession, *[]string, string) {
 	t.Helper()
 	api, seen := fakeDocker(t)
 	client, err := docker.NewClient(api.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(docker.Handler(client, signer, testOrg))
+	srv := httptest.NewServer(docker.Handler(client, testSigner.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
@@ -245,18 +253,16 @@ func TestToolsOverMCP(t *testing.T) {
 }
 
 func TestOnlyGatewaySignedRequestsAreAccepted(t *testing.T) {
-	other, _ := signedctx.NewSigner([]byte(strings.Repeat("z", 32)))
-	stale, _ := signedctx.NewSigner(testKey)
-	for name, header := range map[string]func() string{
-		"không có ngữ cảnh":   func() string { return "" },
+	otherPriv, _ := signedctx.ParseSigningKey(strings.Repeat("7a", 32))
+	other, _ := signedctx.NewSigner(otherPriv)
+	call := signedctx.Context{Kind: signedctx.KindCall, Audience: docker.Slug, OrgID: testOrg, ProjectID: uuid.New(), Initiator: "u"}
+	for name, header := range map[string]func([]byte) string{
+		"không có ngữ cảnh":   func([]byte) string { return "" },
 		"đích là server khác": signed("kubernetes"),
-		"khoá khác": func() string {
-			return other.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: docker.Slug, OrgID: uuid.New(), ProjectID: uuid.New(), Initiator: "u"}, time.Now())
-		},
-		"đã hết hạn": func() string {
-			return stale.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: docker.Slug, OrgID: uuid.New(), ProjectID: uuid.New(), Initiator: "u"}, time.Now().Add(-time.Hour))
-		},
-		"rác": func() string { return "abc.def" },
+		"khoá khác":           func(b []byte) string { return other.SignBody(call, b, time.Now()) },
+		"đã hết hạn":          func(b []byte) string { return testSigner.SignBody(call, b, time.Now().Add(-time.Hour)) },
+		"body khác":           func([]byte) string { return testSigner.SignBody(call, []byte("{}"), time.Now()) },
+		"rác":                 func([]byte) string { return "abc.def" },
 	} {
 		sess, seen, url := connect(t, header)
 		if sess != nil {
@@ -344,16 +350,15 @@ func TestContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, _ := signedctx.NewSigner(testKey)
 	contract.Run(t, contract.Server{
 		Slug:           docker.Slug,
-		Handler:        docker.Handler(client, signer, testOrg),
-		SigningKey:     testKey,
+		Handler:        docker.Handler(client, testSigner.Verifier(), testOrg),
+		Signer:         testSigner,
 		OrgID:          testOrg,
 		TargetRequests: func() int { return int(requests.Load()) },
 		Tools: []contract.Tool{
-			{Name: "list_containers", MaxResultBytes: 256 << 10, Samples: []map[string]any{{}, {"all": true, "limit": 200}}},
-			{Name: "inspect_container", MaxResultBytes: 16 << 10, Samples: []map[string]any{{"name": "worker"}}},
+			{Name: "list_containers", Direct: true, MaxResultBytes: 256 << 10, Samples: []map[string]any{{}, {"all": true, "limit": 200}}},
+			{Name: "inspect_container", Direct: true, MaxResultBytes: 16 << 10, Samples: []map[string]any{{"name": "worker"}}},
 			{Name: "get_container_logs", MaxResultBytes: 64 << 10, Samples: []map[string]any{
 				{"name": "worker", "tail": 50}, {"name": "tty"}, {"name": "noisy", "tail": 1000, "since_seconds": 3600}}},
 		},

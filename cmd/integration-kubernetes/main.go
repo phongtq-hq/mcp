@@ -1,6 +1,6 @@
 // Command integration-kubernetes: managed MCP server chỉ đọc cho một cluster Kubernetes.
 //
-// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (HQ_SERVICE_SIGNING_KEY); không
+// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (kiểm bằng khoá công khai HQ_SERVICE_VERIFY_KEY); không
 // nhận token của người dùng. Địa chỉ apiserver (HQ_KUBERNETES_URL), CA
 // (HQ_KUBERNETES_CA_FILE), bearer token của service account
 // (HQ_KUBERNETES_BEARER_TOKEN_FILE) và phạm vi namespace (HQ_KUBERNETES_NAMESPACES, bắt buộc)
@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hqgroups/mcp/internal/integration/kubernetes"
+	"github.com/hqgroups/mcp/internal/integration/serve"
 	"github.com/hqgroups/mcp/internal/platform/config"
 	"github.com/hqgroups/mcp/internal/platform/process"
 	"github.com/hqgroups/mcp/internal/shared/signedctx"
@@ -57,9 +58,9 @@ func readFile(getenv func(string) string, env string, limit int64) ([]byte, erro
 
 // settings là cấu hình đã kiểm của process.
 type settings struct {
-	client *kubernetes.Client
-	signer *signedctx.Signer
-	orgID  uuid.UUID
+	client   *kubernetes.Client
+	verifier *signedctx.Verifier
+	orgID    uuid.UUID
 	// scope mô tả phạm vi namespace cho log khởi động; không chứa credential.
 	scope      string
 	namespaces []string
@@ -100,15 +101,11 @@ func loadSettings(getenv func(string) string, env string) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	key, err := signedctx.ParseKey(getenv("HQ_SERVICE_SIGNING_KEY"))
-	if err != nil {
-		return settings{}, errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
-	}
-	signer, err := signedctx.NewSigner(key)
+	verifier, err := serve.VerifierFromEnv(getenv)
 	if err != nil {
 		return settings{}, err
 	}
-	return settings{client: client, signer: signer, orgID: orgID, scope: scope, namespaces: namespaces}, nil
+	return settings{client: client, verifier: verifier, orgID: orgID, scope: scope, namespaces: namespaces}, nil
 }
 
 func routes(ctx context.Context, mux *http.ServeMux, deps process.Deps) error {
@@ -117,6 +114,6 @@ func routes(ctx context.Context, mux *http.ServeMux, deps process.Deps) error {
 		return err
 	}
 	slog.InfoContext(ctx, "integration-kubernetes: phạm vi namespace", "scope", cfg.scope, "namespaces", cfg.namespaces)
-	mux.Handle("/mcp", kubernetes.Handler(cfg.client, cfg.signer, cfg.orgID))
+	mux.Handle("/mcp", kubernetes.Handler(cfg.client, cfg.verifier, cfg.orgID))
 	return nil
 }

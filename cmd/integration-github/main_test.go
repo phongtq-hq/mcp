@@ -26,7 +26,7 @@ func TestConfigure(t *testing.T) {
 		"HQ_GITHUB_REPOSITORIES": "acme/api, acme/web",
 		"HQ_GITHUB_TOKEN_FILE":   write("token", token+"\n"),
 		"HQ_GITHUB_ORG_ID":       uuid.NewString(),
-		"HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32),
+		"HQ_SERVICE_VERIFY_KEY":  strings.Repeat("ab", 32),
 	}
 	env := func(overrides map[string]string) func(string) string {
 		return func(key string) string {
@@ -40,7 +40,7 @@ func TestConfigure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cấu hình hợp lệ: %v", err)
 	}
-	if got := cfg.client.Repositories(); len(got) != 2 || cfg.orgID == uuid.Nil || cfg.signer == nil {
+	if got := cfg.client.Repositories(); len(got) != 2 || cfg.orgID == uuid.Nil || cfg.verifier == nil {
 		t.Errorf("cấu hình đọc được: %v", got)
 	}
 	// http được nhận khi HQ_ENV=local (GitHub giả lập trên máy phát triển).
@@ -62,8 +62,9 @@ func TestConfigure(t *testing.T) {
 		"thiếu org id":             {"HQ_GITHUB_ORG_ID": ""},
 		"org id rỗng (nil uuid)":   {"HQ_GITHUB_ORG_ID": uuid.Nil.String()},
 		"org id không phải uuid":   {"HQ_GITHUB_ORG_ID": "acme"},
-		"thiếu khoá ký":            {"HQ_SERVICE_SIGNING_KEY": ""},
-		"khoá ký quá ngắn":         {"HQ_SERVICE_SIGNING_KEY": "abcd"},
+		"thiếu khoá kiểm":          {"HQ_SERVICE_VERIFY_KEY": ""},
+		"được cấp khoá ký":         {"HQ_SERVICE_SIGNING_KEY": strings.Repeat("ab", 32)},
+		"khoá kiểm quá ngắn":       {"HQ_SERVICE_VERIFY_KEY": "abcd"},
 	} {
 		_, err := configure(env(overrides))
 		if err == nil {

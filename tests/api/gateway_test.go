@@ -14,7 +14,6 @@ import (
 	"github.com/hqgroups/mcp/internal/gatewayserver"
 	"github.com/hqgroups/mcp/internal/mcp/registry"
 	"github.com/hqgroups/mcp/internal/platform/identity"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 type bearer struct{ token string }
@@ -30,7 +29,7 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 func TestMCPGateway(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	verifier, err := identity.NewOIDCVerifier(ctx, e.is.srv.URL, audience, "org_id")
 	if err != nil {
 		t.Fatal(err)

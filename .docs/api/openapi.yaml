@@ -1698,8 +1698,14 @@ components:
               properties:
                 type: {type: string, enum: [user, api_key, schedule, workflow]}
                 id: {type: [string, 'null'], format: uuid}
-            input: {type: object, additionalProperties: true}
-            output: {type: [object, 'null'], additionalProperties: true}
+            input:
+              type: object
+              additionalProperties: true
+              description: Vắng mặt khi người gọi không có `execution:read_content` trong project (chỉ có `execution:read`)
+            output:
+              type: [object, 'null']
+              additionalProperties: true
+              description: Câu trả lời của Agent, có thể trích dữ liệu nó đã đọc. Vắng mặt khi người gọi không có `execution:read_content`
             error: {oneOf: [{$ref: '#/components/schemas/Problem'}, {type: 'null'}]}
             budget: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
             estimated_cost: {$ref: '#/components/schemas/Money'}
@@ -1725,10 +1731,10 @@ components:
         on_failure: {type: string, enum: [fail_execution, continue, skip_dependents]}
         budget: {oneOf: [{$ref: '#/components/schemas/Money'}, {type: 'null'}]}
         depth: {type: integer}
-        goal: {type: string}
+        goal: {type: string, description: 'Chuỗi rỗng khi người gọi không có `execution:read_content`'}
         status: {$ref: '#/components/schemas/TaskStatus'}
-        output_summary: {type: [string, 'null']}
-        output: {type: [object, 'null'], additionalProperties: true}
+        output_summary: {type: [string, 'null'], description: 'Vắng mặt khi người gọi không có `execution:read_content`'}
+        output: {type: [object, 'null'], additionalProperties: true, description: 'Vắng mặt khi người gọi không có `execution:read_content`'}
         error: {oneOf: [{$ref: '#/components/schemas/Problem'}, {type: 'null'}]}
         estimated_cost: {$ref: '#/components/schemas/Money'}
         iterations: {type: integer}

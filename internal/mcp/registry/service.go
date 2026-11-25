@@ -164,6 +164,9 @@ func (s *Service) GetServer(ctx context.Context, id uuid.UUID) (Server, error) {
 
 // ToolFilter lọc danh sách tool của version đang hoạt động.
 type ToolFilter struct {
+	// ProjectID: chỉ tool của server dùng được ở project này (server giới hạn theo project
+	// phải được gắn với nó, migration 00041). nil: không lọc theo project.
+	ProjectID *uuid.UUID
 	ServerID  *uuid.UUID
 	Enabled   *bool
 	RiskLevel string
@@ -187,7 +190,7 @@ func (s *Service) ActiveTools(ctx context.Context, f ToolFilter) ([]Tool, error)
 	var rows []store.ListActiveToolsRow
 	err := tenancy.InTx(ctx, s.db, func(tx pgxv5.Tx) (err error) {
 		rows, err = store.New(tx).ListActiveTools(ctx, store.ListActiveToolsParams{
-			OrgID: &orgID, ServerID: f.ServerID, Enabled: f.Enabled, RiskLevel: risk, ToolID: f.ToolID, RowLimit: maxToolsRead})
+			OrgID: &orgID, ServerID: f.ServerID, Enabled: f.Enabled, RiskLevel: risk, ToolID: f.ToolID, ProjectID: f.ProjectID, RowLimit: maxToolsRead})
 		return err
 	})
 	if err != nil {
@@ -218,12 +221,13 @@ func (s *Service) ActiveTools(ctx context.Context, f ToolFilter) ([]Tool, error)
 // allow / deny phải là tool đang bật của version đang hoạt động ("*" là mọi tool
 // đang bật). require_approval trong spec chỉ nhận "always" hoặc "policy", nên Agent
 // không có cách nào nới lỏng mức duyệt của tool.
-func (s *Service) ValidateTools(ctx context.Context, _ uuid.UUID, cfg api.AgentConfig) error {
+func (s *Service) ValidateTools(ctx context.Context, projectID uuid.UUID, cfg api.AgentConfig) error {
 	enabled := true
 	for i, entry := range cfg.Tools {
 		field := "tools[" + itoa(i) + "]"
 		id := entry.ServerId
-		tools, err := s.ActiveTools(ctx, ToolFilter{ServerID: &id, Enabled: &enabled})
+		// Server giới hạn theo project mà chưa gắn với project của Agent coi như không tồn tại.
+		tools, err := s.ActiveTools(ctx, ToolFilter{ServerID: &id, Enabled: &enabled, ProjectID: &projectID})
 		if err != nil {
 			return err
 		}

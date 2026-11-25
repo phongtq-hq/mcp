@@ -17,8 +17,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/hqgroups/mcp/internal/adminops"
+	"github.com/hqgroups/mcp/internal/integration/contract"
 	"github.com/hqgroups/mcp/internal/integration/loki"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // lokiImage: bản Loki dùng cho test đầu-cuối. Đổi bằng HQ_TEST_LOKI_IMAGE.
@@ -72,12 +72,12 @@ func TestLokiEndToEnd(t *testing.T) {
 		t.Fatal("không đẩy được log mẫu vào Loki")
 	}
 
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	client, err := loki.NewClient(endpoint, loki.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	up := httptest.NewServer(loki.Handler(client, signer, e.orgA))
+	up := httptest.NewServer(loki.Handler(client, signer.Verifier(), e.orgA))
 	t.Cleanup(up.Close)
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
@@ -98,19 +98,43 @@ func TestLokiEndToEnd(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
-	call := func(name string, args map[string]any) (string, bool) {
-		t.Helper()
-		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "loki." + name, Arguments: args})
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
+	text := func(res *mcp.CallToolResult) string {
 		var b strings.Builder
 		for _, c := range res.Content {
 			if tc, ok := c.(*mcp.TextContent); ok {
 				b.WriteString(tc.Text)
 			}
 		}
-		return b.String(), res.IsError
+		return b.String()
+	}
+	// direct: client bên ngoài qua Gateway (/mcp/v1/projects/…), không thuộc execution nào.
+	direct := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "loki." + name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return text(res), res.IsError
+	}
+	// query_logs / query_metric chỉ chạy trong execution (serve.Direct). Các phép kiểm LogQL
+	// trên Loki THẬT dưới đây gọi server bằng đúng ngữ cảnh Gateway ký trên tuyến execution
+	// (contract.ExecutionTransport); đường execution → Gateway → managed server có test riêng
+	// ở TestPricingEngineEndToEnd.
+	execSess, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: up.URL, HTTPClient: &http.Client{Transport: contract.ExecutionTransport(signer, loki.Slug, e.orgA, nil)},
+		DisableStandaloneSSE: true, MaxRetries: -1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect (execution): %v", err)
+	}
+	t.Cleanup(func() { _ = execSess.Close() })
+	call := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		res, err := execSess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return text(res), res.IsError
 	}
 	start, end := now.Add(-10*time.Minute).UTC().Format(time.RFC3339), now.Add(time.Minute).UTC().Format(time.RFC3339)
 
@@ -132,10 +156,17 @@ func TestLokiEndToEnd(t *testing.T) {
 	if out, isErr = call("query_metric", map[string]any{"query": `sum(count_over_time({app="e2e"}[1m]))`, "start": start, "end": end, "step_seconds": 60}); isErr || !strings.Contains(out, `"samples":[{`) {
 		t.Errorf("query_metric: err=%v %s", isErr, out)
 	}
-	if out, isErr = call("list_labels", map[string]any{}); isErr || !strings.Contains(out, `"app"`) || !strings.Contains(out, `"env"`) {
+	// Hai tool đọc log không gọi trực tiếp được qua Gateway.
+	for _, name := range []string{"query_logs", "query_metric"} {
+		if out, isErr = direct(name, map[string]any{"query": `{app="e2e"}`, "start": start, "end": end}); !isErr || strings.Contains(out, "DONG-LOG") {
+			t.Errorf("%s gọi trực tiếp qua Gateway được chấp nhận: %s", name, out)
+		}
+	}
+	// Tool siêu dữ liệu gọi trực tiếp được.
+	if out, isErr = direct("list_labels", map[string]any{}); isErr || !strings.Contains(out, `"app"`) || !strings.Contains(out, `"env"`) {
 		t.Errorf("list_labels: err=%v %s", isErr, out)
 	}
-	if out, isErr = call("list_label_values", map[string]any{"label": "app"}); isErr || !strings.Contains(out, `"e2e"`) {
+	if out, isErr = direct("list_label_values", map[string]any{"label": "app"}); isErr || !strings.Contains(out, `"e2e"`) {
 		t.Errorf("list_label_values: err=%v %s", isErr, out)
 	}
 	// LogQL sai là lỗi của tool, không lộ địa chỉ Loki; sai loại truy vấn bị từ chối.

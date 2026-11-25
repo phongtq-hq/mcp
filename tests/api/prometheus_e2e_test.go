@@ -16,7 +16,6 @@ import (
 
 	"github.com/hqgroups/mcp/internal/adminops"
 	"github.com/hqgroups/mcp/internal/integration/prometheus"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 // prometheusImage: bản Prometheus dùng cho test đầu-cuối. Đổi bằng HQ_TEST_PROMETHEUS_IMAGE.
@@ -53,12 +52,12 @@ func TestPrometheusEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	client, err := prometheus.NewClient(endpoint, prometheus.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	up := httptest.NewServer(prometheus.Handler(client, signer, e.orgA))
+	up := httptest.NewServer(prometheus.Handler(client, signer.Verifier(), e.orgA))
 	t.Cleanup(up.Close)
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {

@@ -286,6 +286,17 @@ func TestWorkflows(t *testing.T) {
 		if len(runs) != 1 || runs[0].(map[string]any)["status"] != "completed" {
 			t.Errorf("danh sách lần chạy: %v", runs)
 		}
+		// Viewer (chỉ execution:read) thấy trạng thái nhưng không thấy input / output của lần
+		// chạy: chúng chiếu lại nội dung của execution, có thể trích dữ liệu nhạy cảm.
+		if m := runs[0].(map[string]any); m["output"] != nil || m["input"] != nil {
+			t.Errorf("viewer thấy nội dung lần chạy trong danh sách: %v", m)
+		}
+		if m := e.do("GET", "/v1/workflow-executions/"+runID, viewerA, nil, nil).json(t); m["output"] != nil || m["input"] != nil || m["status"] != "completed" {
+			t.Errorf("viewer thấy nội dung lần chạy: %v", m)
+		}
+		if m := e.do("GET", "/v1/workflow-executions/"+runID, adminA, nil, nil).json(t); m["output"] == nil {
+			t.Errorf("người có execution:read_content phải thấy output: %v", m)
+		}
 		want(t, e.do("GET", "/v1/workflow-executions/"+runID, adminB, nil, nil), 404, "not_found")
 		want(t, e.do("GET", "/v1/workflows/"+wfID+"/executions", adminB, nil, nil), 404, "not_found")
 		want(t, e.do("POST", "/v1/workflow-executions/"+runID+"/cancel", adminB, nil, nil), 404, "not_found")

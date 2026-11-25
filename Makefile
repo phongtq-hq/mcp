@@ -145,8 +145,11 @@ migrate-status:
 
 # Chạy process cục bộ với cấu hình trong .env. Mỗi process chỉ nhận những biến nó
 # được phép giữ: api không có khoá gốc của Secrets, khoá ký ngữ cảnh hay khoá LLM;
-# server MCP không có DSN hay khoá nào ngoài khoá ký ngữ cảnh.
+# server MCP không có DSN hay khoá nào ngoài khoá CÔNG KHAI kiểm ngữ cảnh: không đặt
+# HQ_SERVICE_VERIFY_KEY trong .env thì nó được suy ra từ HQ_SERVICE_SIGNING_KEY bằng
+# hqadmin, và khoá ký không bao giờ được chuyển cho integration (ADR-0018).
 LOADENV = set -a; . ./.env; set +a
+VERIFYKEY = $${HQ_SERVICE_VERIFY_KEY:-$$(./bin/hqadmin service-key public | sed 's/^HQ_SERVICE_VERIFY_KEY=//')}
 
 run-api: build ## API (cần `make dev-db`, `make up-idp`)
 	@$(LOADENV); env -u HQ_SECRETS_ROOT_KEY_FILE -u HQ_SERVICE_SIGNING_KEY -u HQ_ANTHROPIC_API_KEY -u HQ_ADMIN_DATABASE_URL -u HQ_MIGRATE_DATABASE_URL \
@@ -162,33 +165,33 @@ run-worker: build-go ## Execution Worker (cần `make up-temporal`); không nh�
 
 run-docker-mcp: build-go ## Managed MCP server Docker chỉ đọc (cần `make up-docker-proxy`)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_DOCKER_MCP_HTTP_ADDR" HQ_DOCKER_API_URL="$$HQ_DOCKER_API_URL" \
-	  HQ_DOCKER_ORG_ID="$$HQ_DOCKER_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-docker
+	  HQ_DOCKER_ORG_ID="$$HQ_DOCKER_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-docker
 
 run-prometheus-mcp: build-go ## Managed MCP server Prometheus chỉ đọc (HQ_PROMETHEUS_URL do người vận hành đặt)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_PROMETHEUS_MCP_HTTP_ADDR" HQ_PROMETHEUS_URL="$$HQ_PROMETHEUS_URL" \
 	  HQ_PROMETHEUS_BEARER_TOKEN_FILE="$$HQ_PROMETHEUS_BEARER_TOKEN_FILE" \
-	  HQ_PROMETHEUS_ORG_ID="$$HQ_PROMETHEUS_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-prometheus
+	  HQ_PROMETHEUS_ORG_ID="$$HQ_PROMETHEUS_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-prometheus
 
 run-loki-mcp: build-go ## Managed MCP server Loki chỉ đọc (HQ_LOKI_URL do người vận hành đặt)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_LOKI_MCP_HTTP_ADDR" HQ_LOKI_URL="$$HQ_LOKI_URL" \
 	  HQ_LOKI_BEARER_TOKEN_FILE="$$HQ_LOKI_BEARER_TOKEN_FILE" HQ_LOKI_TENANT_ID="$$HQ_LOKI_TENANT_ID" HQ_LOKI_ALLOW_MULTI_TENANT="$$HQ_LOKI_ALLOW_MULTI_TENANT" \
-	  HQ_LOKI_ORG_ID="$$HQ_LOKI_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-loki
+	  HQ_LOKI_ORG_ID="$$HQ_LOKI_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-loki
 
 run-kubernetes-mcp: build-go ## Managed MCP server Kubernetes chỉ đọc (HQ_KUBERNETES_URL do người vận hành đặt)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_KUBERNETES_MCP_HTTP_ADDR" HQ_KUBERNETES_URL="$$HQ_KUBERNETES_URL" \
 	  HQ_KUBERNETES_BEARER_TOKEN_FILE="$$HQ_KUBERNETES_BEARER_TOKEN_FILE" HQ_KUBERNETES_CA_FILE="$$HQ_KUBERNETES_CA_FILE" \
 	  HQ_KUBERNETES_NAMESPACES="$$HQ_KUBERNETES_NAMESPACES" \
-	  HQ_KUBERNETES_ORG_ID="$$HQ_KUBERNETES_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-kubernetes
+	  HQ_KUBERNETES_ORG_ID="$$HQ_KUBERNETES_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-kubernetes
 
 run-github-mcp: build-go ## Managed MCP server GitHub chỉ đọc (token và allowlist do người vận hành đặt)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_GITHUB_MCP_HTTP_ADDR" HQ_GITHUB_API_URL="$$HQ_GITHUB_API_URL" \
 	  HQ_GITHUB_TOKEN_FILE="$$HQ_GITHUB_TOKEN_FILE" HQ_GITHUB_REPOSITORIES="$$HQ_GITHUB_REPOSITORIES" \
-	  HQ_GITHUB_ORG_ID="$$HQ_GITHUB_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-github
+	  HQ_GITHUB_ORG_ID="$$HQ_GITHUB_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-github
 
 run-pricing-engine-mcp: build-go ## Managed MCP server Pricing Engine chỉ đọc (HQ_PRICING_ENGINE_URL và file API key do người vận hành đặt)
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_PRICING_ENGINE_MCP_HTTP_ADDR" HQ_PRICING_ENGINE_URL="$$HQ_PRICING_ENGINE_URL" \
 	  HQ_PRICING_ENGINE_API_KEY_FILE="$$HQ_PRICING_ENGINE_API_KEY_FILE" HQ_PRICING_ENGINE_API_KEY="$$HQ_PRICING_ENGINE_API_KEY" \
-	  HQ_PRICING_ENGINE_ORG_ID="$$HQ_PRICING_ENGINE_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-pricing-engine
+	  HQ_PRICING_ENGINE_ORG_ID="$$HQ_PRICING_ENGINE_ORG_ID" HQ_SERVICE_VERIFY_KEY="$(VERIFYKEY)" ./bin/integration-pricing-engine
 
 measure: ## Đo độ trễ thêm của Gateway, kích thước step và dữ liệu ghi mỗi execution (cần Docker)
 	HQ_MEASURE=1 go test ./tests/api -run TestMeasure -count=1 -v 2>&1 | grep -A8 '=== Số đo'

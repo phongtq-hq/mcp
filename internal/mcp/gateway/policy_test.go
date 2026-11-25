@@ -77,6 +77,32 @@ func TestPolicyMatrix(t *testing.T) {
 	}
 }
 
+// Mức sàn về dữ liệu (security §5.4): tool sensitive chỉ chạy trong execution; execution đã
+// đọc dữ liệu sensitive thì tool egress cần người duyệt; không gì đã bị từ chối được nới ra.
+func TestDataFlowFloors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in           policyInput
+		effect, rule string
+		disabled     bool
+	}{
+		"sensitive gọi trực tiếp":          {policyInput{Risk: "read", Sensitive: true}, effectDeny, "sensitive_requires_execution", false},
+		"sensitive trong execution":        {policyInput{Risk: "read", Sensitive: true, Internal: true}, effectAllow, "risk_read", false},
+		"egress chưa đọc sensitive":        {policyInput{Risk: "read", Internal: true, Egress: true}, effectAllow, "risk_read", false},
+		"egress sau sensitive":             {policyInput{Risk: "read", Internal: true, Egress: true, ReadSensitive: true}, effectRequireApproval, "sensitive_then_egress_requires_approval", false},
+		"egress ghi sau sensitive":         {policyInput{Risk: "write", Environment: "non_prod", Internal: true, Egress: true, ReadSensitive: true}, effectRequireApproval, "sensitive_then_egress_requires_approval", false},
+		"tool không egress sau sensitive":  {policyInput{Risk: "read", Internal: true, ReadSensitive: true}, effectAllow, "risk_read", false},
+		"egress destructive vẫn cần duyệt": {policyInput{Risk: "destructive", Environment: "non_prod", Internal: true, Egress: true, ReadSensitive: true}, effectRequireApproval, "risk_destructive_requires_approval", false},
+		"egress production vẫn bị từ chối": {policyInput{Risk: "write", Environment: "prod", Internal: true, Egress: true, ReadSensitive: true}, effectDeny, "risk_write_production_not_enabled", false},
+		"sensitive tắt vẫn là tắt":         {policyInput{Risk: "read", Sensitive: true}, effectDeny, "tool_disabled", true},
+	} {
+		in := tc.in
+		in.Enabled = !tc.disabled
+		if got := decide(in); got.Effect != tc.effect || got.Rule != tc.rule {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+}
+
 // Số nguyên ngoài ±2^53 bị làm tròn khi giải mã JSON: tool sẽ chạy với giá trị khác giá
 // trị được yêu cầu. Chúng bị từ chối thay vì âm thầm đổi.
 func TestExactNumbers(t *testing.T) {

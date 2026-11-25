@@ -1,6 +1,6 @@
 // Command integration-docker: managed MCP server chỉ đọc cho Docker.
 //
-// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (HQ_SERVICE_SIGNING_KEY); không
+// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (kiểm bằng khoá công khai HQ_SERVICE_VERIFY_KEY); không
 // nhận token của người dùng. Nói chuyện với Docker qua HQ_DOCKER_API_URL, nên là
 // một proxy chỉ cho phép API đọc container, không phải Docker socket trực tiếp.
 package main
@@ -13,8 +13,8 @@ import (
 	"os"
 
 	"github.com/hqgroups/mcp/internal/integration/docker"
+	"github.com/hqgroups/mcp/internal/integration/serve"
 	"github.com/hqgroups/mcp/internal/platform/process"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 func main() {
@@ -35,11 +35,7 @@ func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
 	if err != nil {
 		return err
 	}
-	key, err := signedctx.ParseKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
-	if err != nil {
-		return errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
-	}
-	signer, err := signedctx.NewSigner(key)
+	verifier, err := serve.VerifierFromEnv(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -48,6 +44,6 @@ func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
 	if err != nil || orgID == uuid.Nil {
 		return errors.New("HQ_DOCKER_ORG_ID is required (id của organization sở hữu Docker host này)")
 	}
-	mux.Handle("/mcp", docker.Handler(client, signer, orgID))
+	mux.Handle("/mcp", docker.Handler(client, verifier, orgID))
 	return nil
 }

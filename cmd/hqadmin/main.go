@@ -7,11 +7,14 @@
 //	hqadmin mcp-server register -slug docker -name "Docker" -endpoint http://localhost:8090/mcp [-org acme]
 //	hqadmin mcp-server discover -slug docker [-org acme]
 //	hqadmin mcp-server review   -slug docker -version 2 -approve|-reject [-org acme]
-//	hqadmin mcp-tool classify   -server docker -tool X [-enabled=true] [-risk read|write|destructive|financial] [-org acme]
+//	hqadmin mcp-server scope    -slug pricing-engine -org acme [-scoped=true|false] [-add ops,finance] [-remove sandbox]   giới hạn server theo project (migration 00041)
+//	hqadmin mcp-tool classify   -server docker -tool X [-enabled=true] [-risk read|write|destructive|financial] [-sensitivity public|internal|sensitive] [-egress=true] [-org acme]
 //	hqadmin audit verify        [-org acme] [-allow-truncated-head]   kiểm chuỗi hash của audit (mọi org nếu bỏ -org); đứt, mất đầu, hoặc không kiểm được org nào thì thoát mã khác 0
 //	hqadmin audit export        -org acme -from 2026-11-01T00:00:00Z -to 2026-12-01T00:00:00Z -out audit.jsonl
 //	hqadmin audit verify-file   -in audit.jsonl [-after prev.jsonl]   kiểm một file đã xuất (và việc nó nối với file của lần xuất trước), không cần database
 //	hqadmin temporal-certs init -dir /certs [-server-name temporal]   CA nội bộ + chứng chỉ mTLS cho Temporal tự vận hành (ADR-0017); chạy lại được, không cần database
+//	hqadmin service-key init    -out service-signing.key   khoá ký ngữ cảnh Ed25519 (ADR-0018): seed vào file 0600 cho gateway / hqadmin, in khoá công khai cho managed server
+//	hqadmin service-key public                             in khoá công khai ứng với HQ_SERVICE_SIGNING_KEY
 //
 // -org bỏ trống: server của platform, mọi organization thấy. Các lệnh mcp-server
 // register / discover cần HQ_SERVICE_SIGNING_KEY để gọi managed server.
@@ -42,7 +45,7 @@ func main() {
 	}
 }
 
-const usage = "usage: hqadmin org create | secrets init | temporal-certs init | maintenance run | audit verify|export|verify-file | mcp-server register|set-endpoint|discover|review | mcp-tool classify  (xem chú thích đầu file hoặc -h của từng lệnh)"
+const usage = "usage: hqadmin org create | secrets init | service-key init|public | temporal-certs init | maintenance run | audit verify|export|verify-file | mcp-server register|set-endpoint|discover|review|scope | mcp-tool classify  (xem chú thích đầu file hoặc -h của từng lệnh)"
 
 func run(args []string) error {
 	if len(args) < 2 {
@@ -65,7 +68,7 @@ func run(args []string) error {
 		return conn, nil
 	}
 	signer := func() (*signedctx.Signer, error) {
-		key, err := signedctx.ParseKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
+		key, err := signedctx.ParseSigningKey(os.Getenv("HQ_SERVICE_SIGNING_KEY"))
 		if err != nil {
 			return nil, errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
 		}
@@ -99,6 +102,15 @@ func run(args []string) error {
 		return nil
 	case "secrets init":
 		return secretsInit(args[2:])
+	case "service-key init":
+		return serviceKeyInit(rest)
+	case "service-key public":
+		s, err := signer()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("HQ_SERVICE_VERIFY_KEY=%s\n", s.PublicKeyHex())
+		return nil
 	case "temporal-certs init":
 		return temporalCertsInit(rest)
 	case "audit verify":
@@ -281,6 +293,9 @@ func run(args []string) error {
 		default:
 			fmt.Printf("%s: định nghĩa tool ĐÃ ĐỔI. Version %d chờ duyệt; tool bị tạm khoá: %s\n",
 				srv.Slug, res.Version, strings.Join(res.LockedTools, ", "))
+			if len(res.KeptDisabled) > 0 {
+				fmt.Printf("tool vẫn TẮT ở version mới (giữ lựa chọn trước đó): %s\n", strings.Join(res.KeptDisabled, ", "))
+			}
 		}
 
 	case "mcp-server review":
@@ -304,11 +319,54 @@ func run(args []string) error {
 		}
 		fmt.Printf("%s version %d: approved=%v\n", srv.Slug, *version, *approve)
 
+	case "mcp-server scope":
+		serverFlags("slug")
+		scopedFlag := fs.String("scoped", "", "true | false: server chỉ dùng được ở project đã gắn")
+		addFlag := fs.String("add", "", "slug project cần gắn, phân cách bằng dấu phẩy")
+		removeFlag := fs.String("remove", "", "slug project cần gỡ, phân cách bằng dấu phẩy")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		var scoped *bool
+		switch *scopedFlag {
+		case "":
+		case "true", "false":
+			b := *scopedFlag == "true"
+			scoped = &b
+		default:
+			return errors.New("-scoped phải là true hoặc false")
+		}
+		split := func(v string) []string {
+			var out []string
+			for _, p := range strings.Split(v, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+		conn, err := connect()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+		now, bound, err := adminops.ScopeMCPServer(ctx, conn, srv, scoped, split(*addFlag), split(*removeFlag))
+		if err != nil {
+			return err
+		}
+		if now {
+			fmt.Printf("%s chỉ dùng được ở các project: %s\n", srv.Slug, strings.Join(bound, ", "))
+		} else {
+			fmt.Printf("%s dùng được ở MỌI project của organization (project đã gắn: %s)\n", srv.Slug, strings.Join(bound, ", "))
+		}
+
 	case "mcp-tool classify":
 		serverFlags("server")
 		tool := fs.String("tool", "", "tên tool")
 		enabled := fs.String("enabled", "", "true | false")
 		risk := fs.String("risk", "", "read | write | destructive | financial")
+		sensitivity := fs.String("sensitivity", "", "public | internal | sensitive (sensitive: chỉ chạy trong execution; execution đã đọc nó gọi tool egress thì cần duyệt)")
+		egress := fs.String("egress", "", "true | false (tool gửi dữ liệu ra khỏi platform)")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
@@ -323,6 +381,21 @@ func run(args []string) error {
 		}
 		if *risk != "" {
 			c.RiskLevel = risk
+		}
+		switch *sensitivity {
+		case "":
+		case "public", "internal", "sensitive":
+			c.DataSensitivity = sensitivity
+		default:
+			return errors.New("-sensitivity phải là public, internal hoặc sensitive")
+		}
+		switch *egress {
+		case "":
+		case "true", "false":
+			b := *egress == "true"
+			c.Egress = &b
+		default:
+			return errors.New("-egress phải là true hoặc false")
 		}
 		conn, err := connect()
 		if err != nil {
@@ -368,5 +441,36 @@ func secretsInit(args []string) error {
 		return err
 	}
 	fmt.Printf("đã tạo khoá gốc: %s (chỉ cấp cho gateway)\nHQ_SECRETS_PUBLIC_KEY=%s\n", *out, pub)
+	return nil
+}
+
+// serviceKeyInit tạo khoá ký ngữ cảnh của Gateway (seed Ed25519) vào một file mới quyền 0600
+// và in khoá công khai để cấu hình cho managed server (HQ_SERVICE_VERIFY_KEY). Seed không
+// bao giờ được in ra màn hình.
+func serviceKeyInit(args []string) error {
+	fs := flag.NewFlagSet("service-key init", flag.ContinueOnError)
+	out := fs.String("out", "", "đường dẫn file seed sẽ tạo (nội dung cấp cho gateway và hqadmin qua HQ_SERVICE_SIGNING_KEY)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return errors.New("cần -out")
+	}
+	seed, pub, err := signedctx.GenerateSigningKey()
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("không tạo được file khoá (file đã tồn tại?): %w", err)
+	}
+	if _, err := f.WriteString(seed + "\n"); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	fmt.Printf("đã tạo khoá ký: %s (chỉ cấp cho gateway và hqadmin)\nHQ_SERVICE_VERIFY_KEY=%s\n", *out, pub)
 	return nil
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/hqgroups/mcp/internal/adminops"
 	"github.com/hqgroups/mcp/internal/ai/provider"
-	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
 func TestPlatformAPIKeys(t *testing.T) {
@@ -142,7 +141,7 @@ func TestPlatformAPIKeys(t *testing.T) {
 	})
 
 	t.Run("a key works on the gateway and can start an execution", func(t *testing.T) {
-		signer, _ := signedctx.NewSigner(signingKey)
+		signer := testSigner
 		conn, err := e.db.Admin.Acquire(ctx)
 		if err != nil {
 			t.Fatal(err)

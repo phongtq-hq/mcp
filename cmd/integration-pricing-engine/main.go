@@ -1,6 +1,6 @@
 // Command integration-pricing-engine: managed MCP server chỉ đọc cho Pricing Engine (PE).
 //
-// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (HQ_SERVICE_SIGNING_KEY); không
+// Chỉ nhận request mang ngữ cảnh do MCP Gateway ký (kiểm bằng khoá công khai HQ_SERVICE_VERIFY_KEY); không
 // nhận token của người dùng. Địa chỉ PE (HQ_PRICING_ENGINE_URL) và API key của PE
 // (HQ_PRICING_ENGINE_API_KEY_FILE) do người vận hành managed server đặt: đây không phải
 // giá trị do tenant nhập, nên URL không đi qua SSRF guard, và không tool nào đổi được
@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hqgroups/mcp/internal/integration/pricingengine"
+	"github.com/hqgroups/mcp/internal/integration/serve"
 	"github.com/hqgroups/mcp/internal/platform/config"
 	"github.com/hqgroups/mcp/internal/platform/process"
 	"github.com/hqgroups/mcp/internal/shared/signedctx"
@@ -94,9 +95,9 @@ func apiKeyFrom(getenv func(string) string, env string) (string, error) {
 
 // settings là cấu hình của process sau khi đọc và kiểm.
 type settings struct {
-	client *pricingengine.Client
-	signer *signedctx.Signer
-	orgID  uuid.UUID
+	client   *pricingengine.Client
+	verifier *signedctx.Verifier
+	orgID    uuid.UUID
 }
 
 // load đọc cấu hình từ môi trường. Mọi thiếu sót là lỗi khởi động; thông báo lỗi không
@@ -131,11 +132,7 @@ func load(getenv func(string) string) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	key, err := signedctx.ParseKey(getenv("HQ_SERVICE_SIGNING_KEY"))
-	if err != nil {
-		return settings{}, errors.New("HQ_SERVICE_SIGNING_KEY: " + err.Error())
-	}
-	signer, err := signedctx.NewSigner(key)
+	verifier, err := serve.VerifierFromEnv(getenv)
 	if err != nil {
 		return settings{}, err
 	}
@@ -144,7 +141,7 @@ func load(getenv func(string) string) (settings, error) {
 	if err != nil || orgID == uuid.Nil {
 		return settings{}, errors.New("HQ_PRICING_ENGINE_ORG_ID is required (id của organization sở hữu Pricing Engine này)")
 	}
-	return settings{client: client, signer: signer, orgID: orgID}, nil
+	return settings{client: client, verifier: verifier, orgID: orgID}, nil
 }
 
 func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
@@ -152,6 +149,6 @@ func routes(_ context.Context, mux *http.ServeMux, _ process.Deps) error {
 	if err != nil {
 		return err
 	}
-	mux.Handle("/mcp", pricingengine.Handler(s.client, s.signer, s.orgID))
+	mux.Handle("/mcp", pricingengine.Handler(s.client, s.verifier, s.orgID))
 	return nil
 }

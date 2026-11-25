@@ -19,6 +19,8 @@ import (
 // Authorizer là thứ handler cần từ Authorization & Policy.
 type Authorizer interface {
 	Require(ctx context.Context, permission string, projectID *uuid.UUID) error
+	// Missing trả về permission trong danh sách mà principal không có, không ghi audit.
+	Missing(ctx context.Context, permissions []string, projectID *uuid.UUID) ([]string, error)
 }
 
 // Permission mà các endpoint ở đây yêu cầu. Giá trị phải có trong danh mục của authz.
@@ -170,6 +172,43 @@ func problem(raw json.RawMessage) *api.Problem {
 	return &p
 }
 
+// canReadContent: principal đọc được NỘI DUNG (input, output, goal) của execution trong
+// project này. execution:read chỉ cho xem trạng thái, chi phí và định danh: câu trả lời
+// của Agent có thể trích dữ liệu nhạy cảm nó đã đọc (giá vốn…), nên người chỉ được xem
+// (viewer, approver) không thấy nó (review bảo mật 2026-11-25). Không ghi audit: đây là
+// lọc trường, không phải từ chối truy cập.
+func (h *handlers) canReadContent(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	missing, err := h.authz.Missing(ctx, []string{permExecReadFull}, &projectID)
+	return len(missing) == 0, err
+}
+
+// writeExecution ghi một execution ra phản hồi, bỏ nội dung nếu người gọi thiếu
+// execution:read_content (mọi endpoint trả execution đi qua đây).
+func (h *handlers) writeExecution(w http.ResponseWriter, r *http.Request, status int, e Execution) error {
+	full, err := h.canReadContent(r.Context(), e.ProjectID)
+	if err != nil {
+		return err
+	}
+	out := toAPIExecution(e)
+	if !full {
+		out = redactExecution(out)
+	}
+	httpx.WriteJSON(w, status, out)
+	return nil
+}
+
+// redactExecution / redactTask bỏ nội dung khỏi bản trả về cho người thiếu
+// execution:read_content.
+func redactExecution(e api.Execution) api.Execution {
+	e.Input, e.Output = nil, nil
+	return e
+}
+
+func redactTask(t api.Task) api.Task {
+	t.Goal, t.Output, t.OutputSummary = "", nil, nil
+	return t
+}
+
 func toAPIExecution(e Execution) api.Execution {
 	out := api.Execution{
 		Id: e.ID, ProjectId: e.ProjectID, Mode: api.ExecutionMode(e.Mode), Status: api.ExecutionStatus(e.Status),
@@ -289,8 +328,7 @@ func (h *handlers) create(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/v1/executions/"+e.ID.String())
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(e))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, e)
 }
 
 func (h *handlers) get(w http.ResponseWriter, r *http.Request) error {
@@ -298,7 +336,15 @@ func (h *handlers) get(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, toAPIExecution(e))
+	full, err := h.canReadContent(r.Context(), e.ProjectID)
+	if err != nil {
+		return err
+	}
+	out := toAPIExecution(e)
+	if !full {
+		out = redactExecution(out)
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 	return nil
 }
 
@@ -310,8 +356,7 @@ func (h *handlers) cancel(w http.ResponseWriter, r *http.Request) error {
 	if e, err = h.svc.Cancel(r.Context(), e.ID); err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(e))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, e)
 }
 
 // proposePlan chạy Agent lập kế hoạch của project; kết quả là một đề xuất, không task
@@ -341,8 +386,7 @@ func (h *handlers) proposePlan(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/v1/executions/"+e.ID.String())
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(e))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, e)
 }
 
 // runProposal chạy kế hoạch mà một execution lập kế hoạch đã đề xuất, ngay ở phía api:
@@ -380,8 +424,7 @@ func (h *handlers) runProposal(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/v1/executions/"+out.ID.String())
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(out))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, out)
 }
 
 // planProposal trả về kế hoạch mà một execution lập kế hoạch đã đề xuất, đã kiểm bằng code.
@@ -428,8 +471,7 @@ func (h *handlers) pause(w http.ResponseWriter, r *http.Request) error {
 	if e, err = h.svc.Pause(r.Context(), e.ID); err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(e))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, e)
 }
 
 // resume: người đã yêu cầu tạm dừng tự gỡ được yêu cầu của mình. Gỡ yêu cầu của người
@@ -448,8 +490,7 @@ func (h *handlers) resume(w http.ResponseWriter, r *http.Request) error {
 	if e, err = h.svc.Resume(r.Context(), e.ID); err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusAccepted, toAPIExecution(e))
-	return nil
+	return h.writeExecution(w, r, http.StatusAccepted, e)
 }
 
 func (h *handlers) list(w http.ResponseWriter, r *http.Request) error {
@@ -470,9 +511,16 @@ func (h *handlers) list(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	full, err := h.canReadContent(r.Context(), projectID)
+	if err != nil {
+		return err
+	}
 	data := make([]api.Execution, len(items))
 	for i, e := range items {
 		data[i] = toAPIExecution(e)
+		if !full {
+			data[i] = redactExecution(data[i])
+		}
 	}
 	writePage(w, data, next)
 	return nil
@@ -495,9 +543,16 @@ func (h *handlers) tasks(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	full, err := h.canReadContent(r.Context(), e.ProjectID)
+	if err != nil {
+		return err
+	}
 	data := make([]api.Task, len(items))
 	for i, t := range items {
 		data[i] = toAPITask(t)
+		if !full {
+			data[i] = redactTask(data[i])
+		}
 	}
 	writePage(w, data, "")
 	return nil
@@ -508,7 +563,15 @@ func (h *handlers) task(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusOK, toAPITask(t))
+	full, err := h.canReadContent(r.Context(), t.ProjectID)
+	if err != nil {
+		return err
+	}
+	out := toAPITask(t)
+	if !full {
+		out = redactTask(out)
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
 	return nil
 }
 

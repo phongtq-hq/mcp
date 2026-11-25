@@ -400,28 +400,26 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	testKey   = []byte(strings.Repeat("k", 32))
-	testOrg   = uuid.New()
-	allowlist = []string{"acme/api", "acme/huge", "acme/limited", "acme/secondary", "acme/moved", "acme/echo",
+	testSigner = contract.TestSigner()
+	testOrg    = uuid.New()
+	allowlist  = []string{"acme/api", "acme/huge", "acme/limited", "acme/secondary", "acme/moved", "acme/echo",
 		"acme/denied", "acme/garbage", "acme/flood", "acme/msgonly", "acme/half", "acme/broken", "acme/legal",
 		"acme/badgateway", "acme/slow", "acme/worst"}
 )
 
+// headerTransport ký mỗi request như Gateway trên tuyến execution (contract.ExecutionTransport).
 type headerTransport struct{ signer *signedctx.Signer }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(signedctx.Header, h.signer.Sign(signedctx.Context{Kind: signedctx.KindCall, Audience: github.Slug,
-		OrgID: testOrg, ProjectID: uuid.New(), Initiator: "user:" + uuid.NewString()}, time.Now()))
-	return http.DefaultTransport.RoundTrip(r)
+	return contract.ExecutionTransport(h.signer, github.Slug, testOrg, nil).RoundTrip(r)
 }
 
 // connect dựng server MCP trên client đã cho và nối một MCP client thật vào, với ngữ
 // cảnh ký của org sở hữu.
 func connect(t *testing.T, client *github.Client) *mcp.ClientSession {
 	t.Helper()
-	signer, _ := signedctx.NewSigner(testKey)
-	srv := httptest.NewServer(github.Handler(client, signer, testOrg))
+	signer := testSigner
+	srv := httptest.NewServer(github.Handler(client, signer.Verifier(), testOrg))
 	t.Cleanup(srv.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	sess, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -551,13 +549,13 @@ func repoArgs(repo string, extra map[string]any) map[string]any {
 // Bộ test hợp đồng dùng chung của managed MCP server (mcp-platform §7).
 func TestContract(t *testing.T) {
 	client, rec := newFake(t)
-	signer, _ := signedctx.NewSigner(testKey)
+	signer := testSigner
 	api := func(extra map[string]any) map[string]any { return repoArgs("api", extra) }
 	hugeRepo := func(extra map[string]any) map[string]any { return repoArgs("huge", extra) }
 	contract.Run(t, contract.Server{
 		Slug:           github.Slug,
-		Handler:        github.Handler(client, signer, testOrg),
-		SigningKey:     testKey,
+		Handler:        github.Handler(client, signer.Verifier(), testOrg),
+		Signer:         signer,
 		OrgID:          testOrg,
 		TargetRequests: rec.count,
 		Tools: []contract.Tool{
@@ -565,7 +563,7 @@ func TestContract(t *testing.T) {
 			// thống đích": phải là tool có gọi GitHub.
 			{Name: "list_pull_requests", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
 				api(nil), api(map[string]any{"state": "all", "page": 2, "per_page": 50}), hugeRepo(map[string]any{"per_page": 50})}},
-			{Name: "list_repositories", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{{}}},
+			{Name: "list_repositories", Direct: true, MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{{}}},
 			{Name: "get_pull_request", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
 				api(map[string]any{"number": 7}), api(map[string]any{"number": 8})}},
 			{Name: "list_issues", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
@@ -577,7 +575,7 @@ func TestContract(t *testing.T) {
 				api(map[string]any{"run_id": 55}), hugeRepo(map[string]any{"run_id": 55})}},
 			{Name: "list_commits", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
 				api(nil), api(map[string]any{"ref": "release/1.2", "since": "2026-11-01T00:00:00Z", "until": "2026-11-18T00:00:00+07:00", "per_page": 50})}},
-			{Name: "get_commit_status", MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
+			{Name: "get_commit_status", Direct: true, MaxResultBytes: github.MaxResultBytes, Samples: []map[string]any{
 				api(map[string]any{"sha": sha1}), api(map[string]any{"sha": shaPerm})}},
 		},
 	})

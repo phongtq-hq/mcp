@@ -380,7 +380,7 @@ func (g *Gateway) authenticateTask(w http.ResponseWriter, r *http.Request, class
 	if err := g.users.RequireActive(ctx, p); err != nil {
 		return fail(errUnauthenticated)
 	}
-	if !g.limit(w, r, p, class) {
+	if !g.limit(w, r, p, class, false) {
 		return nil, identity.Principal{}, ActiveTask{}, uuid.Nil, false
 	}
 	task, err := g.tasks.ActiveTask(ctx, claims.TaskID)
@@ -445,7 +445,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, apperr.New(apperr.KindUnauthenticated, "unauthenticated", "thiếu thông tin xác thực"))
 		return
 	}
-	if !g.limit(w, r, p, classMCP) {
+	if !g.limit(w, r, p, classMCP, true) {
 		return
 	}
 	projectID, err := uuid.Parse(r.PathValue("project"))
@@ -473,14 +473,18 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	g.serveTools(w, r, caller{principal: p, projectID: projectID, environment: project.Environment})
+	// Client bên ngoài không thuộc execution nào: tool sensitive không tồn tại với nó (mức
+	// sàn ở decide vẫn từ chối nếu có đường nào khác tới đây).
+	g.serveTools(w, r, caller{principal: p, projectID: projectID, environment: project.Environment,
+		allow: func(t registry.Tool) bool { return t.DataSensitivity != sensitivitySensitive }})
 }
 
 // serveTools trao cho SDK một server chỉ chứa đúng những tool bên gọi được phép.
 func (g *Gateway) serveTools(w http.ResponseWriter, r *http.Request, c caller) {
 	ctx := r.Context()
 	enabled := true
-	tools, err := g.tools.ActiveTools(ctx, registry.ToolFilter{Enabled: &enabled})
+	// Chỉ server dùng được ở project của lời gọi (chính sách project, migration 00041).
+	tools, err := g.tools.ActiveTools(ctx, registry.ToolFilter{Enabled: &enabled, ProjectID: &c.projectID})
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
@@ -541,9 +545,13 @@ type outcome struct {
 	// approvalID là approval liên quan tới quyết định, nếu có.
 	approvalID *uuid.UUID
 	// executed: một tool có giữ chỗ (ghi, hoặc đã qua approval) đã được gửi tới upstream.
-	executed  bool
-	rule      string
-	bytes     int
+	executed bool
+	rule     string
+	bytes    int
+	// items là tổng số phần tử của các mảng ở cấp cao nhất của kết quả (số container,
+	// dòng log, SKU…): không chứa nội dung, nhưng đủ để ước lượng phạm vi một lần đọc
+	// khi điều tra rò rỉ. -1: kết quả không phải một đối tượng JSON.
+	items     int
 	truncated bool
 	redacted  int
 }
@@ -623,8 +631,19 @@ func (g *Gateway) call(ctx context.Context, c caller, tool registry.Tool, rawArg
 
 	// 5. Policy. Gateway luôn tự quyết định, không tin rằng bên gọi đã kiểm tra.
 	internal := c.taskID != nil && c.executionID != nil
+	sensitive := tool.DataSensitivity == sensitivitySensitive
+	egress := tool.Egress || tool.ServerKind == registry.KindExternal
+	readSensitive := false
+	if internal && egress && tool.Enabled {
+		if readSensitive, err = g.hasSensitiveRead(ctx, p.OrgID, *c.executionID); err != nil {
+			slog.ErrorContext(ctx, "gateway: không đọc được trạng thái dữ liệu nhạy cảm của execution", "error", err)
+			return finish(toolResult("Không kiểm tra được chính sách dữ liệu; tool không được chạy.", CodeDenied, nil),
+				outcome{result: audit.OutcomeError, decision: effectDeny, rule: "data_flow_unavailable"})
+		}
+	}
 	d := decide(policyInput{Enabled: tool.Enabled, Risk: tool.RiskLevel, Environment: c.environment, Internal: internal,
-		AgentRequiresApproval: c.requireApproval != nil && c.requireApproval(tool), Delegated: c.delegated, ModelPlanned: c.modelPlanned})
+		AgentRequiresApproval: c.requireApproval != nil && c.requireApproval(tool), Delegated: c.delegated, ModelPlanned: c.modelPlanned,
+		Sensitive: sensitive, Egress: egress, ReadSensitive: readSensitive})
 	if d.Effect == effectDeny {
 		return finish(toolResult("Tool này không được phép chạy trong ngữ cảnh hiện tại.", CodeDenied, nil),
 			outcome{result: audit.OutcomeDenied, decision: effectDeny, rule: d.Rule})
@@ -754,6 +773,15 @@ func (g *Gateway) call(ctx context.Context, c caller, tool registry.Tool, rawArg
 		allowed.executed = true
 	}
 
+	// Execution sắp đọc dữ liệu sensitive: ghi lại TRƯỚC khi gọi upstream, để mọi tool
+	// egress về sau của execution này cần người duyệt. Không ghi được thì không đọc.
+	if internal && sensitive {
+		if err := g.markSensitiveRead(ctx, p.OrgID, *c.executionID, tool.ID); err != nil {
+			slog.ErrorContext(ctx, "gateway: không ghi được việc đọc dữ liệu nhạy cảm", "error", err, "tool", tool.QualifiedName())
+			return failed("Không ghi nhận được việc đọc dữ liệu nhạy cảm; tool không được chạy.")
+		}
+	}
+
 	// 7. Upstream.
 	res, err := g.callUpstream(ctx, tool, hc, args, upstreamMeta)
 	if err != nil {
@@ -822,6 +850,25 @@ func (g *Gateway) claim(ctx context.Context, orgID, taskID uuid.UUID, stepSeq in
 		return nil
 	})
 	return first, same, total, err
+}
+
+// sensitivitySensitive là mức data_sensitivity của dữ liệu nhạy cảm (mcp_tools).
+const sensitivitySensitive = "sensitive"
+
+func (g *Gateway) hasSensitiveRead(ctx context.Context, orgID, executionID uuid.UUID) (bool, error) {
+	var ok bool
+	err := tenancy.InTx(tenancy.WithOrg(ctx, orgID), g.db, func(tx pgxv5.Tx) error {
+		var err error
+		ok, err = store.New(tx).HasSensitiveRead(ctx, store.HasSensitiveReadParams{OrgID: orgID, ExecutionID: executionID})
+		return err
+	})
+	return ok, err
+}
+
+func (g *Gateway) markSensitiveRead(ctx context.Context, orgID, executionID, toolID uuid.UUID) error {
+	return tenancy.InTx(tenancy.WithOrg(ctx, orgID), g.db, func(tx pgxv5.Tx) error {
+		return store.New(tx).MarkSensitiveRead(ctx, store.MarkSensitiveReadParams{OrgID: orgID, ExecutionID: executionID, ToolID: toolID})
+	})
 }
 
 // maxExactInt là 2^53: số nguyên lớn hơn không biểu diễn chính xác được bằng float64.
@@ -920,6 +967,7 @@ func sanitize(res *mcp.CallToolResult, maxBytes int) (*mcp.CallToolResult, outco
 	// NUL không có nghĩa trong văn bản và làm hỏng nơi lưu (jsonb) ở phía sau.
 	text = strings.ReplaceAll(strings.ToValidUTF8(text, "?"), "\x00", "")
 	text, o.redacted = redactText(text)
+	o.items = countItems(text)
 	if len(text) > maxBytes {
 		text = strings.ToValidUTF8(text[:maxBytes], "")
 		o.truncated = true
@@ -960,9 +1008,26 @@ func (g *Gateway) audit(ctx context.Context, c caller, toolID *uuid.UUID, toolNa
 				"decision":         o.decision, "rule": o.rule,
 				"duration_ms":  strconv.FormatInt(took.Milliseconds(), 10),
 				"result_bytes": strconv.Itoa(o.bytes), "truncated": strconv.FormatBool(o.truncated),
-				"redactions": strconv.Itoa(o.redacted),
+				"redactions": strconv.Itoa(o.redacted), "result_items": strconv.Itoa(o.items),
 			})})
 	})
+}
+
+// countItems đếm phần tử của các mảng ở cấp cao nhất của một đối tượng JSON; -1 nếu văn
+// bản không phải một đối tượng JSON.
+func countItems(text string) int {
+	var top map[string]json.RawMessage
+	if json.Unmarshal([]byte(text), &top) != nil {
+		return -1
+	}
+	n := 0
+	for _, v := range top {
+		var arr []json.RawMessage
+		if json.Unmarshal(v, &arr) == nil {
+			n += len(arr)
+		}
+	}
+	return n
 }
 
 func merge(a, b map[string]string) map[string]string {

@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +19,18 @@ import (
 	"github.com/hqgroups/mcp/internal/shared/signedctx"
 )
 
-var signingKey = []byte(strings.Repeat("s", 32))
+// testSigner đóng vai khoá ký ngữ cảnh của Gateway; managed server trong test chỉ nhận testSigner.Verifier().
+var testSigner = func() *signedctx.Signer {
+	priv, err := signedctx.ParseSigningKey(strings.Repeat("73", 32))
+	if err != nil {
+		panic(err)
+	}
+	s, err := signedctx.NewSigner(priv)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}()
 
 // upstream là một managed MCP server giả, đổi được định nghĩa tool giữa các lần
 // discovery, và chỉ nhận request mang ngữ cảnh do platform ký cho đúng slug của nó.
@@ -40,7 +53,7 @@ func schemaOf(props string) json.RawMessage {
 func newUpstream(t *testing.T, slug string, tools ...*mcp.Tool) *upstream {
 	t.Helper()
 	u := &upstream{tools: tools}
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		u.mu.Lock()
 		defer u.mu.Unlock()
@@ -66,10 +79,16 @@ func newUpstream(t *testing.T, slug string, tools ...*mcp.Tool) *upstream {
 		return s
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := signer.Verify(r.Header.Get(signedctx.Header), slug, time.Now()); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if _, err := signer.Verifier().Verify(r.Header.Get(signedctx.Header), slug, body, time.Now()); err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(u.srv.Close)
@@ -101,7 +120,7 @@ func TestMCPRegistry(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	adminA, adminB, viewerA := e.tok("admin-a"), e.tok("admin-b"), e.tok("viewer-a")
-	signer, _ := signedctx.NewSigner(signingKey)
+	signer := testSigner
 	conn, err := e.db.Admin.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -304,6 +323,39 @@ func TestMCPRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("changed definitions keep the operator's classification", func(t *testing.T) {
+		// Người vận hành gắn nhãn sensitive cho một tool đang bật, và tool get_container_logs
+		// đã bị tắt từ trước. Định nghĩa của cả hai đổi ở phía server.
+		sensitive := "sensitive"
+		if err := adminops.ClassifyMCPTool(ctx, conn.Conn(), srvA, "list_containers", registry.Classification{DataSensitivity: &sensitive}); err != nil {
+			t.Fatal(err)
+		}
+		up.set(readTool("list_containers", "Liệt kê container, trạng thái và cổng."), readTool("get_container_logs", "Đọc log của container."),
+			writeTool("restart_container", "Khởi động lại container."), readTool("new_tool", "Tool mới."))
+		res, err := adminops.DiscoverMCPServer(ctx, conn.Conn(), signer, srvA)
+		if err != nil || !res.Pending || strings.Join(res.KeptDisabled, ",") != "get_container_logs" {
+			t.Fatalf("discover: %+v %v", res, err)
+		}
+		// Trong lúc chờ duyệt, người vận hành siết thêm tool đang bị khoá: thay đổi đó phải còn
+		// sau khi duyệt (bản chép lúc discovery không thấy nó).
+		egress := true
+		if err := adminops.ClassifyMCPTool(ctx, conn.Conn(), srvA, "list_containers", registry.Classification{Egress: &egress}); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminops.ReviewMCPServerVersion(ctx, conn.Conn(), srvA, res.Version, true); err != nil {
+			t.Fatal(err)
+		}
+		after := tools(adminA, "")
+		// Tool đã tắt KHÔNG bật lại vì định nghĩa đổi (trước đây nó được bật lặng lẽ).
+		if after["get_container_logs"]["enabled"] != false {
+			t.Errorf("tool người vận hành đã tắt bị bật lại khi định nghĩa đổi: %v", after["get_container_logs"])
+		}
+		// Tool bị khoá (không phải bị tắt) vẫn bật lại sau khi duyệt, và giữ nhãn sensitive.
+		if lc := after["list_containers"]; lc["enabled"] != true || lc["data_sensitivity"] != "sensitive" || lc["egress"] != true {
+			t.Errorf("list_containers sau khi đổi định nghĩa: %v", lc)
+		}
+	})
+
 	t.Run("malformed or unauthenticated servers are rejected whole", func(t *testing.T) {
 		for name, bad := range map[string][]*mcp.Tool{
 			"tên có khoảng trắng": {readTool("bad name", "x")},
@@ -316,7 +368,8 @@ func TestMCPRegistry(t *testing.T) {
 			}
 		}
 		// Sai khoá ký: server từ chối, không có gì được đăng ký.
-		other, _ := signedctx.NewSigner([]byte(strings.Repeat("z", 32)))
+		otherPriv, _ := signedctx.ParseSigningKey(strings.Repeat("7a", 32))
+		other, _ := signedctx.NewSigner(otherPriv)
 		u := newUpstream(t, "bad", readTool("ok", "x"))
 		if _, err := adminops.RegisterManagedMCPServer(ctx, conn.Conn(), other, adminops.MCPServer{OrgSlug: "org-a", Slug: "bad"}, "Bad", u.srv.URL); err == nil {
 			t.Error("đăng ký được với khoá ký sai")

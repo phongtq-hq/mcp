@@ -35,6 +35,8 @@ type knobs struct {
 	ignoreKey        bool // tool ghi không khử trùng theo idempotency_key
 	dryRunWrites     bool // dry_run vẫn ghi
 	noDryRunProperty bool // tool ghi thiếu dry_run
+	noReplayGuard    bool // nhận lại cùng một header
+	directAll        bool // mọi tool gọi trực tiếp được, kể cả tool không khai Direct
 }
 
 // target là hệ thống đích giả lập: đếm lần đọc và giữ các ghi chú đã tạo.
@@ -168,9 +170,13 @@ var discoveryMethods = map[string]bool{"initialize": true, "notifications/initia
 // handler của server mẫu. Không có knob nào thì nó là đúng handler dùng chung của mọi
 // integration (serve.Handler). Các knob dựng lại những cách làm sai để chứng minh bộ test
 // bắt được chúng; sniffBody là đúng đoạn code từng nằm trong hai integration.
-func handler(k knobs, g *target, signer *signedctx.Signer, org uuid.UUID) http.Handler {
-	if !k.noSignature && !k.discoveryCalls && !k.anyOrg && !k.sniffBody {
-		return serve.Handler(slug, signer, org, func() *mcp.Server { return newServer(k, g) })
+func handler(k knobs, g *target, verifier *signedctx.Verifier, org uuid.UUID) http.Handler {
+	if !k.noSignature && !k.discoveryCalls && !k.anyOrg && !k.sniffBody && !k.noReplayGuard {
+		direct := []string{"get_note"}
+		if k.directAll {
+			direct = append(direct, "add_note")
+		}
+		return serve.Handler(slug, verifier, org, func() *mcp.Server { return newServer(k, g) }, serve.Direct(direct...))
 	}
 	server := newServer(k, g)
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
@@ -180,7 +186,13 @@ func handler(k knobs, g *target, signer *signedctx.Signer, org uuid.UUID) http.H
 			h.ServeHTTP(w, r)
 			return
 		}
-		sc, err := signer.Verify(r.Header.Get(signedctx.Header), slug, time.Now())
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		sc, err := verifier.Verify(r.Header.Get(signedctx.Header), slug, body, time.Now())
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -192,23 +204,21 @@ func handler(k knobs, g *target, signer *signedctx.Signer, org uuid.UUID) http.H
 				return
 			}
 		case !k.discoveryCalls:
-			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 			var msg struct {
 				Method string `json:"method"`
 			}
-			if err != nil || json.Unmarshal(body, &msg) != nil || !discoveryMethods[msg.Method] {
+			if json.Unmarshal(body, &msg) != nil || !discoveryMethods[msg.Method] {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		h.ServeHTTP(w, r)
 	})
 }
 
 func server(k knobs) contract.Server {
-	key := bytes.Repeat([]byte("k"), 32)
-	signer, _ := signedctx.NewSigner(key)
+	priv, _ := signedctx.ParseSigningKey(strings.Repeat("6b", 32))
+	signer, _ := signedctx.NewSigner(priv)
 	org := uuid.New()
 	g := &target{byKey: map[string]bool{}}
 	add := contract.Tool{Name: "add_note", Write: true, MaxResultBytes: 1024,
@@ -218,12 +228,12 @@ func server(k knobs) contract.Server {
 		// Cố ý không khai NoDryRun: thiếu dry_run mà không nêu lý do là vi phạm.
 		add.NoDryRun = ""
 	}
-	get := contract.Tool{Name: "get_note", MaxResultBytes: 1024, Samples: []map[string]any{{"name": "a"}}}
+	get := contract.Tool{Name: "get_note", Direct: true, MaxResultBytes: 1024, Samples: []map[string]any{{"name": "a"}}}
 	if k.badName {
 		get.Name = "getNote"
 	}
 	return contract.Server{
-		Slug: slug, Handler: handler(k, g, signer, org), SigningKey: key, OrgID: org,
+		Slug: slug, Handler: handler(k, g, signer.Verifier(), org), Signer: signer, OrgID: org,
 		TargetRequests: func() int { n, _ := g.count(); return n },
 		Tools:          []contract.Tool{get, add},
 	}
@@ -237,19 +247,21 @@ func TestContractCatchesViolations(t *testing.T) {
 		k    knobs
 		want string
 	}{
-		"không kiểm chữ ký":        {knobs{noSignature: true}, "chữ ký:"},
-		"discovery gọi được tool":  {knobs{discoveryCalls: true}, "discovery:"},
-		"chặn discovery bằng body": {knobs{sniffBody: true}, "discovery: tools/call thô được chấp nhận"},
-		"không kiểm org":           {knobs{anyOrg: true}, "tenant:"},
-		"schema nhận trường lạ":    {knobs{looseSchema: true}, "additionalProperties: false"},
-		"tham số credential":       {knobs{credentialField: true}, "tên trường bị cấm (credential)"},
-		"chuỗi không giới hạn":     {knobs{unboundedString: true}, "cần giới hạn độ dài"},
-		"kết quả vượt trần":        {knobs{bigResult: true}, "vượt trần"},
-		"tool đọc thiếu chú thích": {knobs{notReadOnly: true}, "readOnlyHint"},
-		"tên tool sai":             {knobs{badName: true}, "snake_case"},
-		"bỏ qua idempotency_key":   {knobs{ignoreKey: true}, "cùng idempotency_key gây 2 tác động"},
-		"dry_run vẫn ghi":          {knobs{dryRunWrites: true}, "dry_run gây 1 tác động"},
-		"tool ghi thiếu dry_run":   {knobs{noDryRunProperty: true}, "phải có dry_run"},
+		"không kiểm chữ ký":         {knobs{noSignature: true}, "chữ ký:"},
+		"discovery gọi được tool":   {knobs{discoveryCalls: true}, "discovery:"},
+		"chặn discovery bằng body":  {knobs{sniffBody: true}, "discovery: tools/call thô được chấp nhận"},
+		"không kiểm org":            {knobs{anyOrg: true}, "tenant:"},
+		"schema nhận trường lạ":     {knobs{looseSchema: true}, "additionalProperties: false"},
+		"tham số credential":        {knobs{credentialField: true}, "tên trường bị cấm (credential)"},
+		"chuỗi không giới hạn":      {knobs{unboundedString: true}, "cần giới hạn độ dài"},
+		"kết quả vượt trần":         {knobs{bigResult: true}, "vượt trần"},
+		"tool đọc thiếu chú thích":  {knobs{notReadOnly: true}, "readOnlyHint"},
+		"tên tool sai":              {knobs{badName: true}, "snake_case"},
+		"bỏ qua idempotency_key":    {knobs{ignoreKey: true}, "cùng idempotency_key gây 2 tác động"},
+		"dry_run vẫn ghi":           {knobs{dryRunWrites: true}, "dry_run gây 1 tác động"},
+		"tool ghi thiếu dry_run":    {knobs{noDryRunProperty: true}, "phải có dry_run"},
+		"nhận lại header":           {knobs{noReplayGuard: true}, "dùng lại header"},
+		"mở gọi trực tiếp quá rộng": {knobs{directAll: true}, "không khai Direct nhưng gọi trực tiếp được"},
 	} {
 		got := contract.Check(context.Background(), server(tc.k))
 		if !strings.Contains(strings.Join(got, "\n"), tc.want) {

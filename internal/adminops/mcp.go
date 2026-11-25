@@ -178,7 +178,8 @@ func DiscoverMCPServer(ctx context.Context, conn *pgxv5.Conn, signer *signedctx.
 			return err
 		}
 		return recordMCP(ctx, tx, orgID, "mcp_server.definition_changed", res.ServerID,
-			map[string]string{"slug": s.Slug, "pending_version": fmt.Sprint(res.Version), "locked_tools": fmt.Sprint(res.LockedTools)})
+			map[string]string{"slug": s.Slug, "pending_version": fmt.Sprint(res.Version), "locked_tools": fmt.Sprint(res.LockedTools),
+				"kept_disabled": fmt.Sprint(res.KeptDisabled)})
 	})
 	return res, err
 }
@@ -215,9 +216,84 @@ func ClassifyMCPTool(ctx context.Context, conn *pgxv5.Conn, s MCPServer, tool st
 		if c.RiskLevel != nil {
 			d["risk_level"] = *c.RiskLevel
 		}
+		if c.DataSensitivity != nil {
+			d["data_sensitivity"] = *c.DataSensitivity
+		}
+		if c.Egress != nil {
+			d["egress"] = fmt.Sprint(*c.Egress)
+		}
 		return recordMCP(ctx, tx, orgID, "mcp_tool.classify", id, d)
 	})
 }
 
 // noRedirect: ngữ cảnh ký không được đi theo redirect tới một host khác.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// ScopeMCPServer đặt chính sách project của một server thuộc org (migration 00041): scoped
+// bật / tắt việc giới hạn theo project (nil giữ nguyên), add / remove là slug của project
+// cần gắn / gỡ. Trả về trạng thái sau thay đổi. Server của platform không giới hạn theo
+// project được. Mọi thay đổi ghi audit mcp_server.project_scope.
+func ScopeMCPServer(ctx context.Context, conn *pgxv5.Conn, s MCPServer, scoped *bool, add, remove []string) (bool, []string, error) {
+	if s.OrgSlug == "" {
+		return false, nil, errors.New("chỉ server của một organization giới hạn theo project được (-org)")
+	}
+	var nowScoped bool
+	var bound []string
+	err := adminTx(ctx, conn, s.OrgSlug, func(tx pgxv5.Tx, orgID *uuid.UUID) error {
+		var id uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM mcp_servers WHERE slug = $1 AND org_id = $2 FOR UPDATE`, s.Slug, *orgID).Scan(&id); err != nil {
+			if errors.Is(err, pgxv5.ErrNoRows) {
+				return fmt.Errorf("không có server %q trong organization %q", s.Slug, s.OrgSlug)
+			}
+			return err
+		}
+		project := func(slug string) (uuid.UUID, error) {
+			var pid uuid.UUID
+			err := tx.QueryRow(ctx, `SELECT id FROM projects WHERE org_id = $1 AND slug = $2`, *orgID, slug).Scan(&pid)
+			if errors.Is(err, pgxv5.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("không có project %q trong organization %q", slug, s.OrgSlug)
+			}
+			return pid, err
+		}
+		for _, slug := range add {
+			pid, err := project(slug)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO mcp_server_projects (org_id, server_id, project_id) VALUES ($1,$2,$3)
+				ON CONFLICT DO NOTHING`, *orgID, id, pid); err != nil {
+				return err
+			}
+		}
+		for _, slug := range remove {
+			pid, err := project(slug)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM mcp_server_projects WHERE org_id = $1 AND server_id = $2 AND project_id = $3`, *orgID, id, pid); err != nil {
+				return err
+			}
+		}
+		if scoped != nil {
+			if _, err := tx.Exec(ctx, `UPDATE mcp_servers SET project_scoped = $1, updated_at = clock_timestamp() WHERE id = $2`, *scoped, id); err != nil {
+				return err
+			}
+		}
+		if err := tx.QueryRow(ctx, `SELECT project_scoped FROM mcp_servers WHERE id = $1`, id).Scan(&nowScoped); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT p.slug FROM mcp_server_projects b JOIN projects p ON p.org_id = b.org_id AND p.id = b.project_id
+			WHERE b.org_id = $1 AND b.server_id = $2 ORDER BY p.slug`, *orgID, id)
+		if err != nil {
+			return err
+		}
+		bound, err = pgxv5.CollectRows(rows, pgxv5.RowTo[string])
+		if err != nil {
+			return err
+		}
+		return recordMCP(ctx, tx, orgID, "mcp_server.project_scope", id, map[string]string{
+			"slug": s.Slug, "project_scoped": fmt.Sprint(nowScoped), "projects": fmt.Sprint(bound),
+			"added": fmt.Sprint(add), "removed": fmt.Sprint(remove)})
+	})
+	return nowScoped, bound, err
+}

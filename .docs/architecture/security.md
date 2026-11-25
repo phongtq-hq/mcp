@@ -163,7 +163,7 @@ Không có bộ lọc nào chặn được injection một cách đáng tin. Thi
 1. **Quyền nằm ngoài model.** Nội dung trong context không có đường nào để thay đổi tập tool được phép, budget, hay yêu cầu approval. Các giá trị này được nạp từ Agent Version khi bắt đầu và không có API nào để Agent tự sửa.
 2. **Đánh dấu nguồn gốc.** Kết quả tool và memory được đưa vào context trong vai `tool` / khối dữ liệu, không bao giờ nối vào system prompt.
 3. **Tách đọc và hành động.** Giai đoạn chẩn đoán chạy với tập tool chỉ đọc. Hành động ghi chỉ xuất hiện ở giai đoạn riêng, sau approval, với arguments đã cố định.
-4. **Kiểm soát luồng dữ liệu.** Tool được gắn nhãn `data_sensitivity` (nguồn) và `egress` (đích ra ngoài). Execution đã đọc nguồn nhạy cảm mà gọi tool egress → `require_approval`.
+4. **Kiểm soát luồng dữ liệu.** Tool được gắn nhãn `data_sensitivity` (nguồn) và `egress` (đích ra ngoài). Execution đã đọc nguồn nhạy cảm mà gọi tool egress → `require_approval`. **Hiện thực (2026-11-25):** mức sàn trong `decide` của Gateway (`internal/mcp/gateway/policy.go`): tool `sensitive` chỉ chạy trong execution (`sensitive_requires_execution`) và không có trong `tools/list` của client bên ngoài; Gateway ghi `mcp_execution_sensitive_reads` (migration 00040) TRƯỚC khi gọi upstream của tool `sensitive`, và tool `egress` (khai `egress`, hoặc mọi tool của MCP server ngoài: dữ liệu của org không tắt được) của execution đó cần duyệt (`sensitive_then_egress_requires_approval`). Theo execution, không theo task: dữ liệu đi giữa các task qua `output_summary` và delegation. Nhãn đặt bằng `hqadmin mcp-tool classify -sensitivity sensitive` (managed) hoặc `PATCH /v1/mcp-tools` (server ngoài); đổi định nghĩa tool không làm rơi nhãn (migration 00039). Output của execution (có thể trích dữ liệu đã đọc) cần `execution:read_content`.
 5. **Giới hạn bán kính.** Trần iteration, tool call, budget; Agent quyền cao chạy isolated runtime.
 6. **Lọc đầu ra.** Che mẫu secret đã biết trong kết quả tool trước khi vào context; che lại trước khi trả cho người dùng và trước khi ghi log.
 7. **Phát hiện.** Cảnh báo khi Agent gọi tool bị deny lặp lại, hoặc khi mẫu hành vi lệch khỏi lịch sử. Đây là tín hiệu để điều tra, không phải cơ chế chặn.
@@ -222,7 +222,7 @@ Còn nợ: đưa file lên object storage có khoá đối tượng, ký manifes
 |---|---|
 | Input validation | Schema ở biên API (sinh từ OpenAPI) và JSON Schema ở Gateway; giới hạn kích thước body |
 | Rate limiting | Token bucket trên Redis theo org, principal, endpoint, tool; giới hạn riêng cho endpoint xác thực |
-| Request signing | Webhook gửi đi ký HMAC kèm timestamp; header ngữ cảnh gửi managed server được ký |
+| Request signing | Webhook gửi đi ký HMAC kèm timestamp; header ngữ cảnh gửi managed server ký bằng Ed25519 (chỉ Gateway và hqadmin giữ khoá riêng), gắn với hash body và một `jti` dùng một lần (ADR-0018) |
 | Bảo mật vận chuyển | TLS mọi nơi; mTLS nội bộ khi lên Kubernetes |
 | Dữ liệu gửi LLM provider | Cấu hình theo org: provider nào được phép, có che PII trước khi gửi không; model nội bộ cho dữ liệu không được rời hạ tầng |
 | Lưu giữ dữ liệu | Nội dung step có thời hạn ngắn hơn metadata ([schema.md §7](../database/schema.md)) |
