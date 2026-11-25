@@ -3,7 +3,7 @@ SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 OAPI := go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2
 COMPOSE := docker compose -f deployments/compose/docker-compose.yml
 
-.PHONY: deploy-check build-go ui-install ui-build ui-dev ui-lint ui-test smoke up-all down-all ps-all logs-all admin image up-temporal run-worker measure run-api run-gateway run-docker-mcp run-prometheus-mcp run-loki-mcp run-kubernetes-mcp run-github-mcp up-docker-proxy dev-db build test test-short lint fmt generate generate-check up up-idp down migrate-up migrate-down migrate-status
+.PHONY: deploy-check build-go ui-install ui-build ui-dev ui-lint ui-test smoke up-all down-all ps-all logs-all admin image up-temporal run-worker measure run-api run-gateway run-docker-mcp run-prometheus-mcp run-loki-mcp run-kubernetes-mcp run-github-mcp run-pricing-engine-mcp up-docker-proxy dev-db build test test-short lint fmt generate generate-check up up-idp down migrate-up migrate-down migrate-status
 
 # Giao diện web (ADR-0016): mã nguồn React ở web/, bản build ở internal/webui/dist (được
 # nhúng vào binary api bằng go:embed). Cần Node; phiên bản phụ thuộc ghim ở web/package-lock.json.
@@ -184,6 +184,11 @@ run-github-mcp: build-go ## Managed MCP server GitHub chỉ đọc (token và al
 	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_GITHUB_MCP_HTTP_ADDR" HQ_GITHUB_API_URL="$$HQ_GITHUB_API_URL" \
 	  HQ_GITHUB_TOKEN_FILE="$$HQ_GITHUB_TOKEN_FILE" HQ_GITHUB_REPOSITORIES="$$HQ_GITHUB_REPOSITORIES" \
 	  HQ_GITHUB_ORG_ID="$$HQ_GITHUB_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-github
+
+run-pricing-engine-mcp: build-go ## Managed MCP server Pricing Engine chỉ đọc (HQ_PRICING_ENGINE_URL và file API key do người vận hành đặt)
+	@$(LOADENV); env -i PATH="$$PATH" HQ_ENV="$$HQ_ENV" HQ_HTTP_ADDR="$$HQ_PRICING_ENGINE_MCP_HTTP_ADDR" HQ_PRICING_ENGINE_URL="$$HQ_PRICING_ENGINE_URL" \
+	  HQ_PRICING_ENGINE_API_KEY_FILE="$$HQ_PRICING_ENGINE_API_KEY_FILE" HQ_PRICING_ENGINE_API_KEY="$$HQ_PRICING_ENGINE_API_KEY" \
+	  HQ_PRICING_ENGINE_ORG_ID="$$HQ_PRICING_ENGINE_ORG_ID" HQ_SERVICE_SIGNING_KEY="$$HQ_SERVICE_SIGNING_KEY" ./bin/integration-pricing-engine
 
 measure: ## Đo độ trễ thêm của Gateway, kích thước step và dữ liệu ghi mỗi execution (cần Docker)
 	HQ_MEASURE=1 go test ./tests/api -run TestMeasure -count=1 -v 2>&1 | grep -A8 '=== Số đo'

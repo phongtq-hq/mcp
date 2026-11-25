@@ -26,7 +26,8 @@ Mỗi integration là một MCP server độc lập trong thư mục riêng, dù
 
 - Credential hệ thống đích do server lấy theo ngữ cảnh tenant; **không nhận qua tham số tool**, không trả về trong kết quả.
 - Ngữ cảnh tenant (org, project, initiator, execution) đến qua header đã ký từ Gateway; xác minh chữ ký trước khi dùng. Dùng `internal/integration/serve` (`serve.Handler`) cho việc này; không chép đoạn kiểm ngữ cảnh và không phân quyền bằng cách tự đọc body của request MCP (trình đọc JSON của bạn và của SDK có thể hiểu một body theo hai cách).
-- Kết quả tool vẫn là dữ liệu không tin cậy (có thể chứa nội dung do bên ngoài kiểm soát).
+- Tool trả dữ liệu nhạy cảm (giá vốn, dữ liệu khách hàng…) khai `serve.ExecutionOnly("<tool>", …)` khi gọi `serve.Handler`: tool đó chỉ chạy khi ngữ cảnh đã ký mang `ExecutionID` (tool call của Agent Runtime), client bên ngoài gọi thẳng qua Gateway bị từ chối. Bộ test hợp đồng ký ngữ cảnh không có execution: bọc handler thật bằng một lớp ký lại kèm `ExecutionID` trong test (xem `pricingengine_test.go: asExecution`), không nới bộ test, và viết test riêng cho ca bị từ chối.
+- Kết quả tool vẫn là dữ liệu không tin cậy (có thể chứa nội dung do bên ngoài kiểm soát). Trường mã / enum / thời gian của hệ thống đích: kiểm dạng trước khi trả; trường văn bản tự do: thay ký tự điều khiển, xuống dòng và ký tự định dạng Unicode, có trần độ dài.
 
 ## Phân loại (mỗi tool)
 
